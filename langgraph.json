@@ -1,0 +1,8 @@
+{
+    "dependencies": ["."],
+    "graphs": {
+      "agent": "./workflows/basic-agent-with-store.ts:graph",
+      "linearPM": "./workflows/linear-assistant.ts:linearPM"
+    },
+    "env": ".env"
+  }

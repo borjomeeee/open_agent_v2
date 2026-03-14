@@ -1,0 +1,27 @@
+{
+  "name": "open-agent-v2",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "openagent": "./cli.ts"
+  },
+  "devDependencies": {
+    "@langchain/langgraph-cli": "^1.1.15",
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@langchain/core": "^1.1.32",
+    "@langchain/langgraph": "^1.2.2",
+    "@langchain/langgraph-checkpoint-postgres": "^1.0.1",
+    "@langchain/mcp-adapters": "^1.1.3",
+    "@langchain/openai": "^1.2.13",
+    "commander": "^14.0.3",
+    "hono": "^4.12.7",
+    "langchain": "^1.2.32",
+    "zod": "^4.3.6"
+  }
+}
