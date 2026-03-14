@@ -3,6 +3,7 @@ import {
   startE2EServer,
   e2eFetch,
   e2eDeployGraph,
+  json,
   type E2EContext,
 } from "../helpers/e2e-setup.ts";
 
@@ -21,14 +22,14 @@ describe("E2E: API key authentication", () => {
   test("GET /health does not require API key", async () => {
     const res = await e2eFetch(ctx.baseUrl, "/health");
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = await json(res);
     expect(body.status).toBe("ok");
   });
 
   test("API routes reject requests without API key", async () => {
     const res = await e2eFetch(ctx.baseUrl, "/api/graphs");
     expect(res.status).toBe(401);
-    const body = await res.json();
+    const body = await json(res);
     expect(body.error).toBe("Unauthorized");
   });
 
@@ -56,7 +57,7 @@ describe("E2E: API key authentication", () => {
       body: JSON.stringify({ type: "webhook", graphName: "echo", config: {} }),
     });
     expect(createRes.status).toBe(201);
-    const { channel } = await createRes.json();
+    const { channel } = await json(createRes);
 
     const startRes = await e2eFetch(ctx.baseUrl, `/api/channels/${channel.id}/start`, {
       method: "POST",
@@ -69,7 +70,7 @@ describe("E2E: API key authentication", () => {
       body: JSON.stringify({ message: "auth-e2e" }),
     });
     expect(hookRes.status).toBe(200);
-    const body = await hookRes.json();
+    const body = await json(hookRes);
     expect(body.result.echo).toEqual({ message: "auth-e2e" });
   });
 
