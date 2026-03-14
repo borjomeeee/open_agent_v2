@@ -168,9 +168,9 @@ export class GraphQueue {
     let mergedInput: any;
 
     if (pendingJobs.length === 1) {
-      mergedInput = JSON.parse(pendingJobs[0]!.input);
+      mergedInput = [JSON.parse(pendingJobs[0]!.input)];
     } else {
-      mergedInput = { inputs: pendingJobs.map((j) => JSON.parse(j.input)) };
+      mergedInput = pendingJobs.map((j) => JSON.parse(j.input));
       log.info({ graphName: eligible.graph_name, threadId: eligible.thread_id, batchSize: pendingJobs.length }, "Batched jobs");
     }
 
@@ -208,7 +208,7 @@ export class GraphQueue {
         ...(threadId && { configurable: { thread_id: threadId } }),
       });
 
-      const result = await graph.invoke(input, config);
+      const result = await graph.invoke({ input }, config);
 
       const now = new Date().toISOString();
       const placeholders = jobIds.map(() => "?").join(",");
