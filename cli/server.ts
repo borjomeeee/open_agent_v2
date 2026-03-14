@@ -36,7 +36,7 @@ export function registerServerCommands(program: Command) {
           dataDir,
         ];
 
-        const proc = Bun.spawn(args, {
+        const proc = Bun.spawn(args as string[], {
           stdio: ["ignore", "ignore", "ignore"],
           detached: true,
         });

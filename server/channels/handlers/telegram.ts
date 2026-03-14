@@ -5,7 +5,10 @@ import { logger } from "../../logger.ts";
 
 const log = logger.child({ module: "telegram" });
 
-export async function handleTelegramIngress(c: Context, channelManager: ChannelManager) {
+export async function handleTelegramIngress(
+  c: Context,
+  channelManager: ChannelManager,
+) {
   const { id } = c.req.param();
   const channel = channelManager.getChannel(id!);
 
@@ -40,19 +43,14 @@ export async function handleTelegramIngress(c: Context, channelManager: ChannelM
     };
 
     const threadId = `tg:${message.chat.id}`;
-    const botToken = config.botToken;
-    const chatId = message.chat.id;
 
     channelManager.invokeGraph(channel.graphName, input, threadId, {
-      onComplete: async (result) => {
-        if (result === null) return;
-        const replyText = typeof result === "string"
-          ? result
-          : result?.message ?? result?.answer ?? result?.response ?? JSON.stringify(result);
-        await sendTelegramMessage(botToken, chatId, replyText);
-      },
+      onComplete: async (result) => {},
       onError: async (err) => {
-        log.error({ channelId: id, err }, "Graph run failed for Telegram channel");
+        log.error(
+          { channelId: id, err },
+          "Graph run failed for Telegram channel",
+        );
       },
     });
 
@@ -63,34 +61,39 @@ export async function handleTelegramIngress(c: Context, channelManager: ChannelM
   }
 }
 
-export async function setTelegramWebhook(botToken: string, webhookUrl: string): Promise<void> {
-  const res = await fetch(`https://api.telegram.org/bot${botToken}/setWebhook`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url: webhookUrl }),
-  });
+export async function setTelegramWebhook(
+  botToken: string,
+  webhookUrl: string,
+): Promise<void> {
+  const res = await fetch(
+    `https://api.telegram.org/bot${botToken}/setWebhook`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: webhookUrl }),
+    },
+  );
 
   if (!res.ok) {
-    const body = await res.json() as any;
-    throw new Error(`Failed to set Telegram webhook: ${body.description || res.statusText}`);
+    const body = (await res.json()) as any;
+    throw new Error(
+      `Failed to set Telegram webhook: ${body.description || res.statusText}`,
+    );
   }
 }
 
 export async function deleteTelegramWebhook(botToken: string): Promise<void> {
-  const res = await fetch(`https://api.telegram.org/bot${botToken}/deleteWebhook`, {
-    method: "POST",
-  });
+  const res = await fetch(
+    `https://api.telegram.org/bot${botToken}/deleteWebhook`,
+    {
+      method: "POST",
+    },
+  );
 
   if (!res.ok) {
-    const body = await res.json() as any;
-    throw new Error(`Failed to delete Telegram webhook: ${body.description || res.statusText}`);
+    const body = (await res.json()) as any;
+    throw new Error(
+      `Failed to delete Telegram webhook: ${body.description || res.statusText}`,
+    );
   }
-}
-
-async function sendTelegramMessage(botToken: string, chatId: number, text: string): Promise<void> {
-  await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, text }),
-  });
 }
