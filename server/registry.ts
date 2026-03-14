@@ -115,4 +115,15 @@ export class GraphRegistry {
   getEnv(name: string): Record<string, string> {
     return this.data.graphs[name]?.env ?? {};
   }
+
+  async invokeGraph(name: string, input: any, config?: any): Promise<any> {
+    const entry = this.data.graphs[name];
+    if (!entry) throw new Error(`Graph '${name}' not found`);
+    if (!entry.active) throw new Error(`Graph '${name}' is not active`);
+
+    const graph = this.graphInstances.get(name);
+    if (!graph) throw new Error(`Graph '${name}' is registered but not loaded`);
+
+    return graph.invoke(input, config);
+  }
 }

@@ -5,6 +5,11 @@ import { mkdir } from "fs/promises";
 import { GraphRegistry } from "./registry.ts";
 import { loadGraphsFromFile } from "./loader.ts";
 import { decryptEnvVars } from "../lib/crypto.ts";
+import { ChannelManager } from "./channels/manager.ts";
+import { createChannelRoutes, createIngressRoutes } from "./channels/routes.ts";
+import { triggerGraphChannels } from "./channels/handlers/graph.ts";
+import { startCronChannel } from "./channels/handlers/cron.ts";
+import type { CronConfig } from "./channels/types.ts";
 
 export async function createServer(dataDir: string) {
   await mkdir(dataDir, { recursive: true });
@@ -13,6 +18,9 @@ export async function createServer(dataDir: string) {
   await registry.init();
 
   await loadActiveGraphs(registry);
+
+  const channelManager = new ChannelManager(dataDir, registry);
+  await channelManager.init();
 
   const app = new Hono();
 
@@ -30,6 +38,9 @@ export async function createServer(dataDir: string) {
   });
 
   app.get("/health", (c) => c.json({ status: "ok" }));
+
+  // ─── Public ingress routes (no API key) ─────────────────────────
+  app.route("/hooks", createIngressRoutes(channelManager));
 
   app.get("/api/graphs", (c) => {
     const graphs = registry.listAll();
@@ -175,11 +186,19 @@ export async function createServer(dataDir: string) {
       delete input._config;
 
       const result = await graph.invoke(input, config);
+
+      triggerGraphChannels(name, result, channelManager).catch((err) => {
+        console.error(`Graph channel trigger error: ${err.message}`);
+      });
+
       return c.json({ result });
     } catch (err: any) {
       return c.json({ error: `Invocation failed: ${err.message}` }, 500);
     }
   });
+
+  // ─── Channel management ─────────────────────────────────────────
+  app.route("/api/channels", createChannelRoutes(channelManager));
 
   // ─── Per-graph env management ──────────────────────────────────
 
@@ -261,7 +280,24 @@ export async function createServer(dataDir: string) {
     return c.json({ message: `Graph '${name}' removed` });
   });
 
+  await restoreActiveChannels(channelManager);
+
   return app;
+}
+
+async function restoreActiveChannels(channelManager: ChannelManager) {
+  const channels = channelManager.listAll().filter((c) => c.active);
+
+  for (const ch of channels) {
+    try {
+      if (ch.type === "cron") {
+        startCronChannel(ch, channelManager);
+        console.log(`Restored cron channel: ${ch.id} (${(ch.config as CronConfig).schedule})`);
+      }
+    } catch (err: any) {
+      console.error(`Failed to restore channel ${ch.id}: ${err.message}`);
+    }
+  }
 }
 
 async function loadActiveGraphs(registry: GraphRegistry) {
