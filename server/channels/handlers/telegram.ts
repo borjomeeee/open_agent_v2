@@ -39,7 +39,12 @@ export async function handleTelegramIngress(c: Context, channelManager: ChannelM
       message_id: message.message_id,
     };
 
-    const result = await channelManager.invokeGraph(channel.graphName, input);
+    const threadId = `tg:${message.chat.id}`;
+    const result = await channelManager.invokeGraph(channel.graphName, input, threadId);
+
+    if (result === null) {
+      return c.json({ ok: true });
+    }
 
     const replyText = typeof result === "string"
       ? result

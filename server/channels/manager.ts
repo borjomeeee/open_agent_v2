@@ -9,6 +9,7 @@ export class ChannelManager {
   private data: ChannelsData = { channels: {} };
   private channelsPath: string;
   private cronJobs: Map<string, { stop: () => void }> = new Map();
+  private activeRuns: Map<string, AbortController> = new Map();
 
   constructor(
     private dataDir: string,
@@ -127,7 +128,7 @@ export class ChannelManager {
     });
   }
 
-  async invokeGraph(graphName: string, input: any, chainDepth = 0): Promise<any> {
+  async invokeGraph(graphName: string, input: any, threadId?: string, chainDepth = 0): Promise<any> {
     const MAX_CHAIN_DEPTH = 10;
     if (chainDepth >= MAX_CHAIN_DEPTH) {
       throw new Error(`Graph channel chain depth exceeded (max ${MAX_CHAIN_DEPTH}). Possible loop detected.`);
@@ -142,19 +143,47 @@ export class ChannelManager {
       throw new Error(`Graph '${graphName}' is registered but not loaded`);
     }
 
-    const config = withLoggingCallbacks(graphName);
-    const result = await graph.invoke(input, config);
+    const runKey = threadId ? `${graphName}::${threadId}` : undefined;
 
-    const graphChannels = this.getActiveByType("graph", { sourceGraph: graphName });
-    for (const ch of graphChannels) {
-      try {
-        await this.invokeGraph(ch.graphName, result, chainDepth + 1);
-      } catch (err: any) {
-        log.error({ channelId: ch.id, graph: ch.graphName, err }, "Graph channel invocation failed");
+    if (runKey) {
+      const existing = this.activeRuns.get(runKey);
+      if (existing) {
+        existing.abort();
+        log.info({ graphName, threadId }, "Aborted previous run");
       }
     }
 
-    return result;
+    const controller = new AbortController();
+    if (runKey) this.activeRuns.set(runKey, controller);
+
+    try {
+      const config = withLoggingCallbacks(graphName, {
+        signal: controller.signal,
+        ...(threadId && { configurable: { thread_id: threadId } }),
+      });
+      const result = await graph.invoke(input, config);
+
+      const graphChannels = this.getActiveByType("graph", { sourceGraph: graphName });
+      for (const ch of graphChannels) {
+        try {
+          await this.invokeGraph(ch.graphName, result, threadId, chainDepth + 1);
+        } catch (err: any) {
+          log.error({ channelId: ch.id, graph: ch.graphName, err }, "Graph channel invocation failed");
+        }
+      }
+
+      return result;
+    } catch (err: any) {
+      if (controller.signal.aborted) {
+        log.debug({ graphName, threadId }, "Run aborted");
+        return null;
+      }
+      throw err;
+    } finally {
+      if (runKey && this.activeRuns.get(runKey) === controller) {
+        this.activeRuns.delete(runKey);
+      }
+    }
   }
 
   // ─── Cron job management ────────────────────────────────────────

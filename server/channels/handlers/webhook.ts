@@ -30,7 +30,8 @@ export async function handleWebhookIngress(c: Context, channelManager: ChannelMa
 
     try {
       const input = JSON.parse(body);
-      const result = await channelManager.invokeGraph(channel.graphName, input);
+      const threadId = input.thread_id ? `wh:${input.thread_id}` : undefined;
+      const result = await channelManager.invokeGraph(channel.graphName, input, threadId);
       return c.json({ result });
     } catch (err: any) {
       return c.json({ error: `Invocation failed: ${err.message}` }, 500);
@@ -39,7 +40,8 @@ export async function handleWebhookIngress(c: Context, channelManager: ChannelMa
 
   try {
     const input = await c.req.json();
-    const result = await channelManager.invokeGraph(channel.graphName, input);
+    const threadId = input.thread_id ? `wh:${input.thread_id}` : undefined;
+    const result = await channelManager.invokeGraph(channel.graphName, input, threadId);
     return c.json({ result });
   } catch (err: any) {
     return c.json({ error: `Invocation failed: ${err.message}` }, 500);
