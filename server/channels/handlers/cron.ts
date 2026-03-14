@@ -8,13 +8,16 @@ const log = logger.child({ module: "cron" });
 export function startCronChannel(channel: Channel, channelManager: ChannelManager) {
   const config = channel.config as CronConfig;
 
-  const job = new CronJob(config.schedule, async () => {
-    try {
-      log.info({ channelId: channel.id, graph: channel.graphName }, "Invoking graph");
-      await channelManager.invokeGraph(channel.graphName, config.input);
-    } catch (err: any) {
-      log.error({ channelId: channel.id, err }, "Cron invocation error");
-    }
+  const job = new CronJob(config.schedule, () => {
+    log.info({ channelId: channel.id, graph: channel.graphName }, "Invoking graph");
+    channelManager.invokeGraph(channel.graphName, config.input, undefined, {
+      onComplete: async (result) => {
+        log.info({ channelId: channel.id, graph: channel.graphName }, "Cron graph invocation completed");
+      },
+      onError: async (err) => {
+        log.error({ channelId: channel.id, err }, "Cron invocation error");
+      },
+    });
   });
 
   job.start();

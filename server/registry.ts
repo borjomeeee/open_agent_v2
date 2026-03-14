@@ -1,5 +1,5 @@
-import type { CompiledStateGraph, Graph } from "@langchain/langgraph";
 import { join } from "path";
+import type { CompiledGraph } from "./loader.ts";
 
 export interface GraphEntry {
   name: string;
@@ -17,7 +17,7 @@ export interface RegistryData {
 export class GraphRegistry {
   private data: RegistryData = { graphs: {} };
   private registryPath: string;
-  private graphInstances: Map<string, any> = new Map();
+  private graphInstances: Map<string, CompiledGraph> = new Map();
 
   constructor(private dataDir: string) {
     this.registryPath = join(dataDir, "registry.json");
@@ -91,11 +91,11 @@ export class GraphRegistry {
     return Object.values(this.data.graphs);
   }
 
-  setGraphInstance(name: string, instance: any) {
+  setGraphInstance(name: string, instance: CompiledGraph) {
     this.graphInstances.set(name, instance);
   }
 
-  getGraphInstance(name: string): CompiledStateGraph<any, any> | undefined {
+  getGraphInstance(name: string): CompiledGraph | undefined {
     return this.graphInstances.get(name);
   }
 

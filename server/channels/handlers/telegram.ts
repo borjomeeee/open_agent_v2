@@ -40,17 +40,21 @@ export async function handleTelegramIngress(c: Context, channelManager: ChannelM
     };
 
     const threadId = `tg:${message.chat.id}`;
-    const result = await channelManager.invokeGraph(channel.graphName, input, threadId);
+    const botToken = config.botToken;
+    const chatId = message.chat.id;
 
-    if (result === null) {
-      return c.json({ ok: true });
-    }
-
-    const replyText = typeof result === "string"
-      ? result
-      : result?.message ?? result?.answer ?? result?.response ?? JSON.stringify(result);
-
-    await sendTelegramMessage(config.botToken, message.chat.id, replyText);
+    channelManager.invokeGraph(channel.graphName, input, threadId, {
+      onComplete: async (result) => {
+        if (result === null) return;
+        const replyText = typeof result === "string"
+          ? result
+          : result?.message ?? result?.answer ?? result?.response ?? JSON.stringify(result);
+        await sendTelegramMessage(botToken, chatId, replyText);
+      },
+      onError: async (err) => {
+        log.error({ channelId: id, err }, "Graph run failed for Telegram channel");
+      },
+    });
 
     return c.json({ ok: true });
   } catch (err: any) {

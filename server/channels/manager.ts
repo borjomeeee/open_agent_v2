@@ -1,7 +1,8 @@
 import { join } from "path";
-import type { Channel, ChannelsData, ChannelType, ChannelConfig } from "./types.ts";
+import type { Channel, ChannelsData, ChannelType, ChannelConfig, GraphConfig } from "./types.ts";
 import type { GraphRegistry } from "../registry.ts";
-import { logger, withLoggingCallbacks } from "../logger.ts";
+import type { GraphQueue } from "../queue.ts";
+import { logger } from "../logger.ts";
 
 const log = logger.child({ module: "channels" });
 
@@ -9,13 +10,17 @@ export class ChannelManager {
   private data: ChannelsData = { channels: {} };
   private channelsPath: string;
   private cronJobs: Map<string, { stop: () => void }> = new Map();
-  private activeRuns: Map<string, AbortController> = new Map();
+  private queue!: GraphQueue;
 
   constructor(
     private dataDir: string,
     private registry: GraphRegistry,
   ) {
     this.channelsPath = join(dataDir, "channels.json");
+  }
+
+  setQueue(queue: GraphQueue) {
+    this.queue = queue;
   }
 
   async init() {
@@ -123,65 +128,44 @@ export class ChannelManager {
     return Object.values(this.data.channels).filter((c) => {
       if (c.type !== type || !c.active) return false;
       if (filter?.graphName && c.graphName !== filter.graphName) return false;
-      if (filter?.sourceGraph && (c.config as any).sourceGraph !== filter.sourceGraph) return false;
+      if (filter?.sourceGraph && (c.config as GraphConfig).sourceGraph !== filter.sourceGraph) return false;
       return true;
     });
   }
 
-  async invokeGraph(graphName: string, input: any, threadId?: string, chainDepth = 0): Promise<any> {
-    const MAX_CHAIN_DEPTH = 10;
-    if (chainDepth >= MAX_CHAIN_DEPTH) {
-      throw new Error(`Graph channel chain depth exceeded (max ${MAX_CHAIN_DEPTH}). Possible loop detected.`);
-    }
-
+  async invokeGraph(graphName: string, input: any, threadId?: string, opts?: {
+    onComplete?: (result: any) => Promise<void>;
+    onError?: (err: Error) => Promise<void>;
+  }): Promise<any> {
     const entry = this.registry.getEntry(graphName);
     if (!entry) throw new Error(`Graph '${graphName}' not found`);
     if (!entry.active) throw new Error(`Graph '${graphName}' is not active`);
 
-    const graph = this.registry.getGraphInstance(graphName);
-    if (!graph) {
-      throw new Error(`Graph '${graphName}' is registered but not loaded`);
-    }
-
-    const runKey = threadId ? `${graphName}::${threadId}` : undefined;
-
-    if (runKey) {
-      const existing = this.activeRuns.get(runKey);
-      if (existing) {
-        existing.abort();
-        log.info({ graphName, threadId }, "Aborted previous run");
-      }
-    }
-
-    const controller = new AbortController();
-    if (runKey) this.activeRuns.set(runKey, controller);
-
-    try {
-      const config = withLoggingCallbacks(graphName, {
-        signal: controller.signal,
-        ...(threadId && { configurable: { thread_id: threadId } }),
+    if (opts?.onComplete) {
+      const originalOnComplete = opts.onComplete;
+      this.queue.enqueue(graphName, input, {
+        threadId,
+        onComplete: async (result) => {
+          await originalOnComplete(result);
+          await this.invokeGraphChannels(graphName, result, threadId);
+        },
+        onError: opts.onError,
       });
-      const result = await graph.invoke(input, config);
+      return null;
+    }
 
-      const graphChannels = this.getActiveByType("graph", { sourceGraph: graphName });
-      for (const ch of graphChannels) {
-        try {
-          await this.invokeGraph(ch.graphName, result, threadId, chainDepth + 1);
-        } catch (err: any) {
-          log.error({ channelId: ch.id, graph: ch.graphName, err }, "Graph channel invocation failed");
-        }
-      }
+    const result = await this.queue.enqueueAndWait(graphName, input, threadId);
+    await this.invokeGraphChannels(graphName, result, threadId);
+    return result;
+  }
 
-      return result;
-    } catch (err: any) {
-      if (controller.signal.aborted) {
-        log.debug({ graphName, threadId }, "Run aborted");
-        return null;
-      }
-      throw err;
-    } finally {
-      if (runKey && this.activeRuns.get(runKey) === controller) {
-        this.activeRuns.delete(runKey);
+  private async invokeGraphChannels(graphName: string, result: any, threadId?: string) {
+    const graphChannels = this.getActiveByType("graph", { sourceGraph: graphName });
+    for (const ch of graphChannels) {
+      try {
+        await this.queue.enqueueAndWait(ch.graphName, result, threadId);
+      } catch (err: any) {
+        log.error({ channelId: ch.id, graph: ch.graphName, err }, "Graph channel invocation failed");
       }
     }
   }

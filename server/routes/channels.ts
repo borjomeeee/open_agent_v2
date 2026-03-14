@@ -1,17 +1,15 @@
-import { Hono } from "hono";
-import type { ChannelManager } from "./manager.ts";
-import type { ChannelType, ChannelConfig, WebhookConfig, TelegramConfig, CronConfig, GraphConfig } from "./types.ts";
-import { handleWebhookIngress } from "./handlers/webhook.ts";
-import { handleTelegramIngress, setTelegramWebhook, deleteTelegramWebhook } from "./handlers/telegram.ts";
-import { startCronChannel } from "./handlers/cron.ts";
+import { Hono, type Context } from "hono";
+import type { ChannelManager } from "../channels/manager.ts";
+import type { ChannelType, ChannelConfig, WebhookConfig, TelegramConfig, CronConfig, GraphConfig } from "../channels/types.ts";
+import { handleWebhookIngress } from "../channels/handlers/webhook.ts";
+import { handleTelegramIngress, setTelegramWebhook, deleteTelegramWebhook } from "../channels/handlers/telegram.ts";
+import { startCronChannel } from "../channels/handlers/cron.ts";
 import { logger } from "../logger.ts";
 
 const log = logger.child({ module: "channels" });
 
 export function createChannelRoutes(channelManager: ChannelManager) {
   const app = new Hono();
-
-  // ─── Channel management (protected by API key via parent mount) ──
 
   app.get("/", (c) => {
     const graphName = c.req.query("graph");
@@ -152,23 +150,25 @@ export function createIngressRoutes(channelManager: ChannelManager) {
   return app;
 }
 
-function getServerUrl(c: any): string {
+function getServerUrl(c: Context): string {
   const proto = c.req.header("x-forwarded-proto") || "http";
   const host = c.req.header("host") || "localhost";
   return `${proto}://${host}`;
 }
 
-function validateConfig(type: ChannelType, config: any): string | null {
+function validateConfig(type: ChannelType, config: ChannelConfig): string | null {
   switch (type) {
     case "telegram":
-      if (!config.botToken) return "Telegram channel requires 'botToken' in config";
+      if (!(config as TelegramConfig).botToken) return "Telegram channel requires 'botToken' in config";
       break;
-    case "cron":
-      if (!config.schedule) return "Cron channel requires 'schedule' in config";
-      if (!config.input || typeof config.input !== "object") return "Cron channel requires 'input' object in config";
+    case "cron": {
+      const cron = config as CronConfig;
+      if (!cron.schedule) return "Cron channel requires 'schedule' in config";
+      if (!cron.input || typeof cron.input !== "object") return "Cron channel requires 'input' object in config";
       break;
+    }
     case "graph":
-      if (!config.sourceGraph) return "Graph channel requires 'sourceGraph' in config";
+      if (!(config as GraphConfig).sourceGraph) return "Graph channel requires 'sourceGraph' in config";
       break;
   }
   return null;
