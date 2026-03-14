@@ -1,6 +1,9 @@
 import type { Context } from "hono";
 import type { ChannelManager } from "../manager.ts";
 import type { TelegramConfig } from "../types.ts";
+import { logger } from "../../logger.ts";
+
+const log = logger.child({ module: "telegram" });
 
 export async function handleTelegramIngress(c: Context, channelManager: ChannelManager) {
   const { id } = c.req.param();
@@ -46,7 +49,7 @@ export async function handleTelegramIngress(c: Context, channelManager: ChannelM
 
     return c.json({ ok: true });
   } catch (err: any) {
-    console.error(`Telegram channel ${id} error: ${err.message}`);
+    log.error({ channelId: id, err }, "Telegram channel error");
     return c.json({ ok: true });
   }
 }

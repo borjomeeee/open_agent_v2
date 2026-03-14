@@ -1,6 +1,9 @@
 import { join } from "path";
 import type { Channel, ChannelsData, ChannelType, ChannelConfig } from "./types.ts";
 import type { GraphRegistry } from "../registry.ts";
+import { logger, withLoggingCallbacks } from "../logger.ts";
+
+const log = logger.child({ module: "channels" });
 
 export class ChannelManager {
   private data: ChannelsData = { channels: {} };
@@ -139,14 +142,15 @@ export class ChannelManager {
       throw new Error(`Graph '${graphName}' is registered but not loaded`);
     }
 
-    const result = await graph.invoke(input);
+    const config = withLoggingCallbacks(graphName);
+    const result = await graph.invoke(input, config);
 
     const graphChannels = this.getActiveByType("graph", { sourceGraph: graphName });
     for (const ch of graphChannels) {
       try {
         await this.invokeGraph(ch.graphName, result, chainDepth + 1);
       } catch (err: any) {
-        console.error(`Graph channel ${ch.id} (${ch.graphName}) failed: ${err.message}`);
+        log.error({ channelId: ch.id, graph: ch.graphName, err }, "Graph channel invocation failed");
       }
     }
 

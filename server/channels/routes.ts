@@ -4,6 +4,9 @@ import type { ChannelType, ChannelConfig, WebhookConfig, TelegramConfig, CronCon
 import { handleWebhookIngress } from "./handlers/webhook.ts";
 import { handleTelegramIngress, setTelegramWebhook, deleteTelegramWebhook } from "./handlers/telegram.ts";
 import { startCronChannel } from "./handlers/cron.ts";
+import { logger } from "../logger.ts";
+
+const log = logger.child({ module: "channels" });
 
 export function createChannelRoutes(channelManager: ChannelManager) {
   const app = new Hono();
@@ -105,12 +108,12 @@ export function createChannelRoutes(channelManager: ChannelManager) {
         const serverUrl = getServerUrl(c);
         const webhookUrl = `${serverUrl}/hooks/telegram/${channel.id}`;
         await setTelegramWebhook(config.botToken, webhookUrl);
-        console.log(`Telegram webhook set for channel ${id}: ${webhookUrl}`);
+        log.info({ channelId: id, webhookUrl }, "Telegram webhook set");
       }
 
       if (channel.type === "cron") {
         startCronChannel(channel, channelManager);
-        console.log(`Cron channel ${id} started with schedule: ${(channel.config as CronConfig).schedule}`);
+        log.info({ channelId: id, schedule: (channel.config as CronConfig).schedule }, "Cron channel started");
       }
 
       return c.json({ message: `Channel activated`, channel });

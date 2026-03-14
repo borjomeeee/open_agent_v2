@@ -1,3 +1,4 @@
+import type { CompiledStateGraph, Graph } from "@langchain/langgraph";
 import { join } from "path";
 
 export interface GraphEntry {
@@ -94,7 +95,7 @@ export class GraphRegistry {
     this.graphInstances.set(name, instance);
   }
 
-  getGraphInstance(name: string): any | undefined {
+  getGraphInstance(name: string): CompiledStateGraph<any, any> | undefined {
     return this.graphInstances.get(name);
   }
 

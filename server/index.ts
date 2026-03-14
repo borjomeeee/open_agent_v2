@@ -1,5 +1,4 @@
 import { Hono } from "hono";
-import { logger } from "hono/logger";
 import { join } from "path";
 import { mkdir } from "fs/promises";
 import { GraphRegistry } from "./registry.ts";
@@ -9,6 +8,9 @@ import { ChannelManager } from "./channels/manager.ts";
 import { createChannelRoutes, createIngressRoutes } from "./channels/routes.ts";
 import { startCronChannel } from "./channels/handlers/cron.ts";
 import type { CronConfig } from "./channels/types.ts";
+import { logger } from "./logger.ts";
+
+const log = logger.child({ module: "server" });
 
 export async function createServer(dataDir: string) {
   await mkdir(dataDir, { recursive: true });
@@ -23,7 +25,15 @@ export async function createServer(dataDir: string) {
 
   const app = new Hono();
 
-  app.use("*", logger());
+  const httpLog = logger.child({ module: "http" });
+  app.use("*", async (c, next) => {
+    const start = Date.now();
+    await next();
+    httpLog.info(
+      { method: c.req.method, path: c.req.path, status: c.res.status, durationMs: Date.now() - start },
+      `${c.req.method} ${c.req.path}`,
+    );
+  });
 
   app.use("/api/*", async (c, next) => {
     const apiKey = process.env.API_KEY;
@@ -254,10 +264,10 @@ async function restoreActiveChannels(channelManager: ChannelManager) {
     try {
       if (ch.type === "cron") {
         startCronChannel(ch, channelManager);
-        console.log(`Restored cron channel: ${ch.id} (${(ch.config as CronConfig).schedule})`);
+        log.info({ channelId: ch.id, schedule: (ch.config as CronConfig).schedule }, "Restored cron channel");
       }
     } catch (err: any) {
-      console.error(`Failed to restore channel ${ch.id}: ${err.message}`);
+      log.error({ channelId: ch.id, err }, "Failed to restore channel");
     }
   }
 }
@@ -275,12 +285,10 @@ async function loadActiveGraphs(registry: GraphRegistry) {
       const primaryExport = entry.exports[0]!;
       if (graphs[primaryExport]) {
         registry.setGraphInstance(entry.name, graphs[primaryExport]);
-        console.log(`Loaded graph: ${entry.name}`);
+        log.info({ graph: entry.name }, "Loaded graph");
       }
     } catch (err: any) {
-      console.error(
-        `Failed to load graph '${entry.name}': ${err.message}`,
-      );
+      log.error({ graph: entry.name, err }, "Failed to load graph");
     }
   }
 }

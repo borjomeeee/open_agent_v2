@@ -196,11 +196,14 @@ serverCmd
       process.exit(0);
     }
 
+    process.env.OPENAGENT_LOG_DIR = resolve(dataDir, "logs");
+
     const { createServer } = await import("./server/index.ts");
     const app = await createServer(dataDir);
 
     console.log(`openagent server listening on port ${port}`);
     console.log(`  data-dir: ${dataDir}`);
+    console.log(`  logs:     ${process.env.OPENAGENT_LOG_DIR}`);
 
     Bun.serve({
       port,
@@ -258,6 +261,42 @@ serverCmd
       console.log(`Server is running (pid: ${pid})`);
     } catch {
       console.log(`Server is not running (stale PID file, pid was: ${pid})`);
+    }
+  });
+
+serverCmd
+  .command("logs")
+  .description("View server logs")
+  .option("-f, --follow", "Follow log output (like tail -f)")
+  .option("-n, --lines <count>", "Number of recent lines to show", "50")
+  .option("--raw", "Show raw JSON instead of pretty-printing")
+  .option("-d, --data-dir <dir>", "Data directory")
+  .action(async (opts) => {
+    const config = await loadAppConfig();
+    const dataDir = resolve(opts.dataDir || config.serverConfig?.dataDir || "./deployed");
+    const logFile = resolve(dataDir, "logs", "server.log");
+
+    if (!(await Bun.file(logFile).exists())) {
+      console.error(`No log file found at ${logFile}`);
+      console.error("Make sure the server has been started at least once.");
+      process.exit(1);
+    }
+
+    const tailArgs = ["-n", opts.lines];
+    if (opts.follow) tailArgs.push("-f");
+    tailArgs.push(logFile);
+
+    const tail = Bun.spawn(["tail", ...tailArgs], { stdout: opts.raw ? "inherit" : "pipe" });
+
+    if (!opts.raw) {
+      const prettyBin = resolve(import.meta.dir, "node_modules", ".bin", "pino-pretty");
+      const pretty = Bun.spawn([prettyBin, "--colorize"], {
+        stdin: tail.stdout!,
+        stdout: "inherit",
+      });
+      await pretty.exited;
+    } else {
+      await tail.exited;
     }
   });
 
