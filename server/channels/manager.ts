@@ -130,9 +130,13 @@ export class ChannelManager {
       throw new Error(`Graph channel chain depth exceeded (max ${MAX_CHAIN_DEPTH}). Possible loop detected.`);
     }
 
+    const entry = this.registry.getEntry(graphName);
+    if (!entry) throw new Error(`Graph '${graphName}' not found`);
+    if (!entry.active) throw new Error(`Graph '${graphName}' is not active`);
+
     const graph = this.registry.getGraphInstance(graphName);
     if (!graph) {
-      throw new Error(`Graph '${graphName}' is not loaded`);
+      throw new Error(`Graph '${graphName}' is registered but not loaded`);
     }
 
     const result = await graph.invoke(input);

@@ -7,7 +7,6 @@ import { loadGraphsFromFile } from "./loader.ts";
 import { decryptEnvVars } from "../lib/crypto.ts";
 import { ChannelManager } from "./channels/manager.ts";
 import { createChannelRoutes, createIngressRoutes } from "./channels/routes.ts";
-import { triggerGraphChannels } from "./channels/handlers/graph.ts";
 import { startCronChannel } from "./channels/handlers/cron.ts";
 import type { CronConfig } from "./channels/types.ts";
 
@@ -158,43 +157,6 @@ export async function createServer(dataDir: string) {
 
     await registry.deactivate(name);
     return c.json({ message: `Graph '${name}' deactivated` });
-  });
-
-  app.post("/api/graphs/:name/invoke", async (c) => {
-    const { name } = c.req.param();
-    const entry = registry.getEntry(name);
-
-    if (!entry) {
-      return c.json({ error: "Graph not found" }, 404);
-    }
-
-    if (!entry.active) {
-      return c.json({ error: `Graph '${name}' is not active` }, 400);
-    }
-
-    const graph = registry.getGraphInstance(name);
-    if (!graph) {
-      return c.json(
-        { error: `Graph '${name}' is registered but not loaded` },
-        500,
-      );
-    }
-
-    try {
-      const input = await c.req.json();
-      const config = input._config;
-      delete input._config;
-
-      const result = await graph.invoke(input, config);
-
-      triggerGraphChannels(name, result, channelManager).catch((err) => {
-        console.error(`Graph channel trigger error: ${err.message}`);
-      });
-
-      return c.json({ result });
-    } catch (err: any) {
-      return c.json({ error: `Invocation failed: ${err.message}` }, 500);
-    }
   });
 
   // ─── Channel management ─────────────────────────────────────────
