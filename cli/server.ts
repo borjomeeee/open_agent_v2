@@ -26,7 +26,7 @@ export function registerServerCommands(program: Command) {
       if (!opts.foreground) {
         const args = [
           "bun",
-          import.meta.path,
+          process.argv[1],
           "server",
           "start",
           "--foreground",

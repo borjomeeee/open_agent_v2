@@ -1,17 +1,17 @@
 import type { Command } from "commander";
 import { resolve, basename } from "path";
 import * as p from "@clack/prompts";
-import { encryptEnvVars } from "../lib/crypto.ts";
+import { encryptEnvVars } from "../lib/crypto";
 import {
   loadAppConfig,
   saveAppConfig,
   getConnection,
   apiHeaders,
   parseEnvFile,
-} from "./config.ts";
-import { handleCancel, promptSelectServer, promptSelectGraph } from "./prompts.ts";
-import { registerEnvCommands } from "./env.ts";
-import { registerChannelCommands } from "./channels.ts";
+} from "./config";
+import { handleCancel, promptSelectServer, promptSelectGraph } from "./prompts";
+import { registerEnvCommands } from "./env";
+import { registerChannelCommands } from "./channels";
 
 export function registerClientCommands(program: Command) {
   const clientCmd = program.command("client").description("Client operations");
@@ -183,8 +183,9 @@ export function registerClientCommands(program: Command) {
         } else {
           console.log(`Status: server responded with ${res.status}`);
         }
-      } catch {
+      } catch (err) {
         console.log("Status: unreachable");
+        console.log(`  Error: ${err instanceof Error ? err.message : err}`);
       }
       console.log();
     });
