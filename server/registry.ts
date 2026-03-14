@@ -6,6 +6,7 @@ export interface GraphEntry {
   active: boolean;
   deployedAt: string;
   exports: string[];
+  env?: Record<string, string>;
 }
 
 export interface RegistryData {
@@ -34,13 +35,15 @@ export class GraphRegistry {
     await Bun.write(this.registryPath, JSON.stringify(this.data, null, 2));
   }
 
-  async register(name: string, fileName: string, exports: string[]) {
+  async register(name: string, fileName: string, exports: string[], env?: Record<string, string>) {
+    const existing = this.data.graphs[name];
     this.data.graphs[name] = {
       name,
       fileName,
       active: true,
       deployedAt: new Date().toISOString(),
       exports,
+      env: env ?? existing?.env,
     };
     await this.save();
   }
@@ -99,5 +102,17 @@ export class GraphRegistry {
     const entry = this.data.graphs[name];
     if (!entry) return undefined;
     return join(this.dataDir, entry.fileName);
+  }
+
+  async setEnv(name: string, vars: Record<string, string>): Promise<boolean> {
+    const entry = this.data.graphs[name];
+    if (!entry) return false;
+    entry.env = vars;
+    await this.save();
+    return true;
+  }
+
+  getEnv(name: string): Record<string, string> {
+    return this.data.graphs[name]?.env ?? {};
   }
 }

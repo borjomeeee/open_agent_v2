@@ -1,9 +1,12 @@
 #!/usr/bin/env bun
 
 import { Command } from "commander";
-import { resolve, basename } from "path";
+import { resolve, basename, dirname } from "path";
 import { homedir } from "os";
 import { mkdir } from "fs/promises";
+import dotenv from "dotenv";
+import { encryptEnvVars } from "./lib/crypto.ts";
+import * as p from "@clack/prompts";
 
 const program = new Command();
 
@@ -20,11 +23,18 @@ const CONFIG_PATH = resolve(CONFIG_DIR, "config.json");
 interface ServerProfile {
   url: string;
   key?: string;
+  encryptionKey?: string;
+}
+
+interface ServerConfig {
+  port: number;
+  dataDir: string;
 }
 
 interface AppConfig {
   servers: Record<string, ServerProfile>;
   active?: string;
+  serverConfig?: ServerConfig;
 }
 
 async function loadAppConfig(): Promise<AppConfig> {
@@ -76,6 +86,66 @@ function apiHeaders(key?: string): Record<string, string> {
   return headers;
 }
 
+// ─── Interactive prompt helpers ────────────────────────────────────
+
+function handleCancel<T>(value: T): asserts value is Exclude<T, symbol> {
+  if (p.isCancel(value)) {
+    p.cancel("Operation cancelled.");
+    process.exit(0);
+  }
+}
+
+async function fetchGraphList(conn: ServerProfile): Promise<any[]> {
+  const res = await fetch(`${conn.url}/api/graphs`, {
+    headers: apiHeaders(conn.key),
+  });
+  if (!res.ok) {
+    console.error(`Failed to fetch graphs: ${res.status} ${res.statusText}`);
+    process.exit(1);
+  }
+  const { graphs } = (await res.json()) as { graphs: any[] };
+  return graphs;
+}
+
+async function promptSelectServer(config: AppConfig): Promise<string> {
+  const names = Object.keys(config.servers);
+  if (names.length === 0) {
+    console.error("No servers configured. Run `openagent client setup` first.");
+    process.exit(1);
+  }
+  const name = await p.select({
+    message: "Select a server profile",
+    options: names.map((n) => ({
+      value: n,
+      label: n,
+      hint: `${config.servers[n]!.url}${n === config.active ? " (active)" : ""}`,
+    })),
+  });
+  handleCancel(name);
+  return name;
+}
+
+async function promptSelectGraph(conn: ServerProfile, filter?: "active" | "all"): Promise<string> {
+  let graphs = await fetchGraphList(conn);
+  if (filter === "active") {
+    graphs = graphs.filter((g: any) => g.active);
+  }
+  if (graphs.length === 0) {
+    console.error(filter === "active" ? "No active graphs found." : "No graphs deployed.");
+    process.exit(1);
+  }
+  const name = await p.select({
+    message: "Select a graph",
+    options: graphs.map((g: any) => ({
+      value: g.name as string,
+      label: g.name,
+      hint: g.active ? "active" : "inactive",
+    })),
+  });
+  handleCancel(name);
+  return name;
+}
+
 // ─── openagent server ──────────────────────────────────────────────
 
 const serverCmd = program.command("server").description("Server management");
@@ -83,12 +153,19 @@ const serverCmd = program.command("server").description("Server management");
 serverCmd
   .command("start")
   .description("Start the openagent server")
-  .option("-p, --port <port>", "Port to listen on", "3000")
-  .option("-d, --data-dir <dir>", "Directory for deployed graphs", "./deployed")
+  .option("-p, --port <port>", "Port to listen on")
+  .option("-d, --data-dir <dir>", "Directory for deployed graphs")
   .option("--foreground", "Run in foreground (don't daemonize)")
   .action(async (opts) => {
-    const port = parseInt(opts.port);
-    const dataDir = resolve(opts.dataDir);
+    const config = await loadAppConfig();
+    const saved = config.serverConfig;
+
+    const port = parseInt(opts.port || "") || saved?.port || 3000;
+    const dataDir = resolve(opts.dataDir || saved?.dataDir || "./deployed");
+
+    if (!saved && !opts.port && !opts.dataDir && !opts.foreground) {
+      console.log(`Using defaults (port: ${port}, data-dir: ${dataDir}). Run \`openagent server setup\` to configure.`);
+    }
 
     if (!opts.foreground) {
       const args = [
@@ -184,20 +261,110 @@ serverCmd
     }
   });
 
+serverCmd
+  .command("setup")
+  .description("Configure default server settings (port, data directory)")
+  .option("-p, --port <port>", "Port to listen on")
+  .option("-d, --data-dir <dir>", "Directory for deployed graphs")
+  .action(async (opts) => {
+    const config = await loadAppConfig();
+    const existing = config.serverConfig;
+
+    let port: number;
+    let dataDir: string;
+
+    if (opts.port && opts.dataDir) {
+      port = parseInt(opts.port);
+      dataDir = resolve(opts.dataDir);
+    } else {
+      p.intro("Server configuration");
+
+      const answers = await p.group({
+        port: () =>
+          p.text({
+            message: "Port to listen on",
+            placeholder: String(existing?.port ?? 3000),
+            defaultValue: String(existing?.port ?? 3000),
+            validate: (v) => (!v || isNaN(parseInt(v)) ? "Must be a number" : undefined),
+          }),
+        dataDir: () =>
+          p.text({
+            message: "Directory for deployed graphs",
+            placeholder: existing?.dataDir ?? "./deployed",
+            defaultValue: existing?.dataDir ?? "./deployed",
+          }),
+      }, {
+        onCancel: () => { p.cancel("Operation cancelled."); process.exit(0); },
+      });
+
+      port = parseInt(answers.port);
+      dataDir = resolve(answers.dataDir);
+    }
+
+    config.serverConfig = { port, dataDir };
+    await saveAppConfig(config);
+    console.log(`Server config saved:`);
+    console.log(`  port:     ${port}`);
+    console.log(`  data-dir: ${dataDir}`);
+  });
+
 // ─── openagent client ──────────────────────────────────────────────
 
 const clientCmd = program.command("client").description("Client operations");
 
 clientCmd
-  .command("setup <name> <url>")
+  .command("setup [name] [url]")
   .description("Add or update a named server profile")
   .option("-k, --key <key>", "API key for authentication")
-  .action(async (name: string, url: string, opts) => {
+  .option("--encryption-key <encryptionKey>", "Shared secret for encrypting env vars in transit")
+  .action(async (nameArg: string | undefined, urlArg: string | undefined, opts) => {
+    let name = nameArg;
+    let url = urlArg;
+    let key = opts.key as string | undefined;
+    let encryptionKey = opts.encryptionKey as string | undefined;
+
+    if (!name || !url) {
+      p.intro("Server profile setup");
+
+      const answers = await p.group({
+        name: () =>
+          p.text({
+            message: "Profile name",
+            placeholder: "default",
+            defaultValue: name || "default",
+            validate: (v) => (!v ? "Name is required" : undefined),
+          }),
+        url: () =>
+          p.text({
+            message: "Server URL",
+            placeholder: "http://localhost:3000",
+            initialValue: url,
+            validate: (v) => (!v ? "URL is required" : undefined),
+          }),
+        key: () =>
+          p.password({
+            message: "API key (leave empty to skip)",
+          }),
+        encryptionKey: () =>
+          p.password({
+            message: "Encryption key for env vars (leave empty to skip)",
+          }),
+      }, {
+        onCancel: () => { p.cancel("Operation cancelled."); process.exit(0); },
+      });
+
+      name = answers.name;
+      url = answers.url;
+      if (answers.key) key = answers.key;
+      if (answers.encryptionKey) encryptionKey = answers.encryptionKey;
+    }
+
     const config = await loadAppConfig();
 
     config.servers[name] = {
       url: url.replace(/\/$/, ""),
-      key: opts.key,
+      key,
+      encryptionKey,
     };
 
     const isFirst = Object.keys(config.servers).length === 1;
@@ -223,16 +390,21 @@ clientCmd
   });
 
 clientCmd
-  .command("connect <name>")
+  .command("connect [name]")
   .description("Switch the active server connection")
-  .action(async (name: string) => {
+  .action(async (nameArg: string | undefined) => {
     const config = await loadAppConfig();
+    let name = nameArg;
+
+    if (!name) {
+      name = await promptSelectServer(config);
+    }
 
     if (!config.servers[name]) {
       console.error(`Server '${name}' not found. Available servers:`);
       const names = Object.keys(config.servers);
       if (names.length === 0) {
-        console.error("  (none) -- run `openagent client setup <name> <url>` first");
+        console.error("  (none) -- run `openagent client setup` first");
       } else {
         for (const n of names) {
           console.error(`  - ${n} (${config.servers[n]!.url})`);
@@ -269,7 +441,7 @@ clientCmd
     const names = Object.keys(config.servers);
 
     if (names.length === 0) {
-      console.log("No servers configured. Run `openagent client setup <name> <url>` to add one.");
+      console.log("No servers configured. Run `openagent client setup` to add one.");
       return;
     }
 
@@ -282,7 +454,7 @@ clientCmd
     }
 
     if (!config.active) {
-      console.log("\nNo active connection. Run `openagent client connect <name>`.");
+      console.log("\nNo active connection. Run `openagent client connect` to select one.");
       return;
     }
 
@@ -349,21 +521,87 @@ clientCmd
   });
 
 clientCmd
-  .command("start <fileOrName>")
+  .command("start [fileOrName]")
   .description(
     "Deploy and activate a graph (pass .ts file) or activate an existing one (pass name)",
   )
   .option("-n, --name <name>", "Graph name (defaults to filename without extension)")
+  .option("-e, --env <path>", "Path to .env file with graph-specific variables")
   .option("-s, --server <url>", "Server URL (overrides saved config)")
   .option("-k, --key <key>", "API key")
-  .action(async (fileOrName: string, opts) => {
+  .action(async (fileOrNameArg: string | undefined, opts) => {
+    let fileOrName = fileOrNameArg;
+
+    if (!fileOrName) {
+      const mode = await p.select({
+        message: "What would you like to do?",
+        options: [
+          { value: "deploy" as const, label: "Deploy a file", hint: "bundle and deploy a .ts/.js file" },
+          { value: "activate" as const, label: "Activate an existing graph", hint: "start a previously deployed graph" },
+        ],
+      });
+      handleCancel(mode);
+
+      if (mode === "deploy") {
+        const filePath = await p.text({
+          message: "Path to the graph file (.ts or .js)",
+          placeholder: "./workflows/my-graph.ts",
+          validate: (v) => {
+            if (!v) return "File path is required";
+            if (!v.endsWith(".ts") && !v.endsWith(".js")) return "File must be .ts or .js";
+            return undefined;
+          },
+        });
+        handleCancel(filePath);
+        fileOrName = filePath;
+
+        if (!opts.name) {
+          const nameOverride = await p.text({
+            message: "Graph name (leave empty to use filename)",
+            placeholder: basename(filePath).replace(/\.(ts|js)$/, ""),
+          });
+          handleCancel(nameOverride);
+          if (nameOverride) opts.name = nameOverride;
+        }
+
+        if (!opts.env) {
+          const wantEnv = await p.confirm({
+            message: "Include a .env file?",
+            initialValue: false,
+          });
+          handleCancel(wantEnv);
+          if (wantEnv) {
+            const envPath = await p.text({
+              message: "Path to .env file",
+              placeholder: "./.env",
+              validate: (v) => (!v ? "Path is required" : undefined),
+            });
+            handleCancel(envPath);
+            opts.env = envPath;
+          }
+        }
+      } else {
+        const conn = await getConnection(opts);
+        fileOrName = await promptSelectGraph(conn, "all");
+      }
+    }
+
     const conn = await getConnection(opts);
-    const isFile = fileOrName.endsWith(".ts") || fileOrName.endsWith(".js");
+    const isFile = fileOrName!.endsWith(".ts") || fileOrName!.endsWith(".js");
 
     if (isFile) {
-      const filePath = resolve(fileOrName);
+      const filePath = resolve(fileOrName!);
       const graphName =
         opts.name || basename(filePath).replace(/\.(ts|js)$/, "");
+
+      let envVars: Record<string, string> | undefined;
+      if (opts.env) {
+        const envPath = resolve(opts.env);
+        envVars = await parseEnvFile(envPath);
+        if (Object.keys(envVars).length === 0) {
+          envVars = undefined;
+        }
+      }
 
       console.log(`Bundling ${filePath}...`);
 
@@ -391,11 +629,25 @@ clientCmd
         `Bundle complete (${(bundledCode.length / 1024).toFixed(1)} KB)`,
       );
 
+      const deployBody: Record<string, any> = { name: graphName, code: bundledCode };
+      const headers = apiHeaders(conn.key);
+
+      if (envVars) {
+        const encrypted = !!conn.encryptionKey;
+        console.log(`Including ${Object.keys(envVars).length} env var(s)${encrypted ? " (encrypted)" : ""} in deploy...`);
+        if (conn.encryptionKey) {
+          deployBody.env = encryptEnvVars(envVars, conn.encryptionKey);
+          headers["X-Env-Encrypted"] = "true";
+        } else {
+          deployBody.env = envVars;
+        }
+      }
+
       console.log(`Deploying as '${graphName}'...`);
       const res = await fetch(`${conn.url}/api/graphs/deploy`, {
         method: "POST",
-        headers: apiHeaders(conn.key),
-        body: JSON.stringify({ name: graphName, code: bundledCode }),
+        headers,
+        body: JSON.stringify(deployBody),
       });
 
       const body = await res.json();
@@ -409,8 +661,8 @@ clientCmd
         console.log(`  exports: ${(body as any).exports.join(", ")}`);
       }
     } else {
-      console.log(`Activating graph '${fileOrName}'...`);
-      const res = await fetch(`${conn.url}/api/graphs/${fileOrName}/start`, {
+      console.log(`Activating graph '${fileOrName!}'...`);
+      const res = await fetch(`${conn.url}/api/graphs/${fileOrName!}/start`, {
         method: "POST",
         headers: apiHeaders(conn.key),
       });
@@ -425,12 +677,13 @@ clientCmd
   });
 
 clientCmd
-  .command("stop <name>")
+  .command("stop [name]")
   .description("Deactivate a graph (keeps file, disables webhook)")
   .option("-s, --server <url>", "Server URL (overrides saved config)")
   .option("-k, --key <key>", "API key")
-  .action(async (name: string, opts) => {
+  .action(async (nameArg: string | undefined, opts) => {
     const conn = await getConnection(opts);
+    const name = nameArg || await promptSelectGraph(conn, "active");
 
     const res = await fetch(`${conn.url}/api/graphs/${name}/stop`, {
       method: "POST",
@@ -446,12 +699,25 @@ clientCmd
   });
 
 clientCmd
-  .command("remove <name>")
+  .command("remove [name]")
   .description("Fully remove a deployed graph (deletes file)")
   .option("-s, --server <url>", "Server URL (overrides saved config)")
   .option("-k, --key <key>", "API key")
-  .action(async (name: string, opts) => {
+  .action(async (nameArg: string | undefined, opts) => {
     const conn = await getConnection(opts);
+    const name = nameArg || await promptSelectGraph(conn, "all");
+
+    if (!nameArg) {
+      const confirmed = await p.confirm({
+        message: `Remove graph '${name}'? This will delete the deployed file.`,
+        initialValue: false,
+      });
+      handleCancel(confirmed);
+      if (!confirmed) {
+        p.cancel("Removal cancelled.");
+        process.exit(0);
+      }
+    }
 
     const res = await fetch(`${conn.url}/api/graphs/${name}`, {
       method: "DELETE",
@@ -464,6 +730,149 @@ clientCmd
       process.exit(1);
     }
     console.log((body as any).message);
+  });
+
+// ─── Env helpers ──────────────────────────────────────────────────
+
+async function parseEnvFile(envPath: string): Promise<Record<string, string>> {
+  const file = Bun.file(envPath);
+  if (!(await file.exists())) {
+    console.error(`Env file not found: ${envPath}`);
+    process.exit(1);
+  }
+  const parsed: Record<string, string> = {};
+  dotenv.config({ path: envPath, processEnv: parsed });
+  return parsed;
+}
+
+function prepareEnvPayload(
+  vars: Record<string, string>,
+  conn: ServerProfile,
+): { headers: Record<string, string>; body: string } {
+  const headers = apiHeaders(conn.key);
+  let payload = vars;
+  if (conn.encryptionKey) {
+    payload = encryptEnvVars(vars, conn.encryptionKey);
+    headers["X-Env-Encrypted"] = "true";
+  }
+  return { headers, body: JSON.stringify({ vars: payload }) };
+}
+
+// ─── openagent client env ─────────────────────────────────────────
+
+const envCmd = clientCmd.command("env").description("Manage per-graph environment variables");
+
+envCmd
+  .command("set [name] [vars...]")
+  .description("Set env vars for a graph (replaces all existing, KEY=VALUE pairs or .env file)")
+  .option("-s, --server <url>", "Server URL")
+  .option("-k, --key <key>", "API key")
+  .action(async (nameArg: string | undefined, vars: string[], opts) => {
+    const conn = await getConnection(opts);
+    const name = nameArg || await promptSelectGraph(conn, "all");
+
+    const parsed: Record<string, string> = {};
+
+    if (vars.length === 0) {
+      const source = await p.select({
+        message: "How would you like to provide env vars?",
+        options: [
+          { value: "manual" as const, label: "Enter KEY=VALUE pairs one by one" },
+          { value: "file" as const, label: "Load from a .env file" },
+        ],
+      });
+      handleCancel(source);
+
+      if (source === "file") {
+        const envPath = await p.text({
+          message: "Path to .env file",
+          placeholder: "./.env",
+          validate: (v) => (!v ? "Path is required" : undefined),
+        });
+        handleCancel(envPath);
+        const fileVars = await parseEnvFile(resolve(envPath));
+        Object.assign(parsed, fileVars);
+      } else {
+        let adding = true;
+        while (adding) {
+          const pair = await p.text({
+            message: "Enter KEY=VALUE (leave empty to finish)",
+            placeholder: "MY_API_KEY=sk-...",
+          });
+          handleCancel(pair);
+          if (!pair) {
+            adding = false;
+            break;
+          }
+          const eqIdx = pair.indexOf("=");
+          if (eqIdx === -1) {
+            console.warn(`Skipped '${pair}' -- expected KEY=VALUE format.`);
+            continue;
+          }
+          parsed[pair.slice(0, eqIdx)] = pair.slice(eqIdx + 1);
+        }
+      }
+
+      if (Object.keys(parsed).length === 0) {
+        console.log("No env vars provided.");
+        return;
+      }
+    } else {
+      for (const v of vars) {
+        const eqIdx = v.indexOf("=");
+        if (eqIdx === -1) {
+          console.error(`Invalid format: '${v}'. Use KEY=VALUE.`);
+          process.exit(1);
+        }
+        parsed[v.slice(0, eqIdx)] = v.slice(eqIdx + 1);
+      }
+    }
+
+    const { headers, body } = prepareEnvPayload(parsed, conn);
+    const res = await fetch(`${conn.url}/api/graphs/${name}/env`, {
+      method: "PUT",
+      headers,
+      body,
+    });
+
+    const resBody = await res.json();
+    if (!res.ok) {
+      console.error(`Failed: ${(resBody as any).error}`);
+      process.exit(1);
+    }
+    console.log((resBody as any).message);
+  });
+
+envCmd
+  .command("list [name]")
+  .description("List env vars for a graph (values masked)")
+  .option("-s, --server <url>", "Server URL")
+  .option("-k, --key <key>", "API key")
+  .action(async (nameArg: string | undefined, opts) => {
+    const conn = await getConnection(opts);
+    const name = nameArg || await promptSelectGraph(conn, "all");
+    const res = await fetch(`${conn.url}/api/graphs/${name}/env`, {
+      headers: apiHeaders(conn.key),
+    });
+
+    if (!res.ok) {
+      const body = await res.json();
+      console.error(`Failed: ${(body as any).error}`);
+      process.exit(1);
+    }
+
+    const { env } = (await res.json()) as { env: Record<string, string> };
+    const keys = Object.keys(env);
+    if (keys.length === 0) {
+      console.log(`No env vars set for '${name}'.`);
+      return;
+    }
+
+    console.log(`\nEnv vars for '${name}':`);
+    for (const [key, value] of Object.entries(env)) {
+      console.log(`  ${key}=${value}`);
+    }
+    console.log();
   });
 
 program.parse();

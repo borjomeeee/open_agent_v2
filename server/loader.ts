@@ -6,6 +6,7 @@ export interface LoadedGraphs {
 
 export async function loadGraphsFromFile(
   filePath: string,
+  env: Record<string, string> = {},
 ): Promise<LoadedGraphs> {
   const absPath = resolve(filePath);
   const cacheBuster = `?t=${Date.now()}`;
@@ -16,6 +17,11 @@ export async function loadGraphsFromFile(
   for (const [key, value] of Object.entries(mod)) {
     if (isCompiledGraph(value)) {
       graphs[key] = value;
+    } else if (isBuilderFunction(value)) {
+      const built = (value as Function)(env);
+      if (isCompiledGraph(built)) {
+        graphs[key] = built;
+      }
     }
   }
 
@@ -30,4 +36,8 @@ function isCompiledGraph(value: unknown): boolean {
     "stream" in value! &&
     typeof (value as any).invoke === "function"
   );
+}
+
+function isBuilderFunction(value: unknown): boolean {
+  return typeof value === "function";
 }
