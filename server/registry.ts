@@ -1,5 +1,5 @@
 import { join } from "path";
-import type { CompiledGraph } from "./loader.ts";
+import type { GraphBuilder } from "./loader.ts";
 
 export interface GraphEntry {
   name: string;
@@ -17,7 +17,7 @@ export interface RegistryData {
 export class GraphRegistry {
   private data: RegistryData = { graphs: {} };
   private registryPath: string;
-  private graphInstances: Map<string, CompiledGraph> = new Map();
+  private graphBuilders: Map<string, GraphBuilder> = new Map();
 
   constructor(private dataDir: string) {
     this.registryPath = join(dataDir, "registry.json");
@@ -61,7 +61,7 @@ export class GraphRegistry {
     const entry = this.data.graphs[name];
     if (!entry) return false;
     entry.active = false;
-    this.graphInstances.delete(name);
+    this.graphBuilders.delete(name);
     await this.save();
     return true;
   }
@@ -77,7 +77,7 @@ export class GraphRegistry {
       await unlink(filePath);
     }
 
-    this.graphInstances.delete(name);
+    this.graphBuilders.delete(name);
     delete this.data.graphs[name];
     await this.save();
     return true;
@@ -91,12 +91,12 @@ export class GraphRegistry {
     return Object.values(this.data.graphs);
   }
 
-  setGraphInstance(name: string, instance: CompiledGraph) {
-    this.graphInstances.set(name, instance);
+  setGraphBuilder(name: string, builder: GraphBuilder) {
+    this.graphBuilders.set(name, builder);
   }
 
-  getGraphInstance(name: string): CompiledGraph | undefined {
-    return this.graphInstances.get(name);
+  getGraphBuilder(name: string): GraphBuilder | undefined {
+    return this.graphBuilders.get(name);
   }
 
   getFilePath(name: string): string | undefined {

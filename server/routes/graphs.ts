@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { join } from "path";
 import type { GraphRegistry } from "../registry.ts";
-import { loadGraphsFromFile } from "../loader.ts";
+import { loadBuildersFromFile } from "../loader.ts";
 import { decryptEnvVars } from "../../lib/crypto.ts";
 
 export function createGraphRoutes(registry: GraphRegistry, dataDir: string) {
@@ -58,9 +58,8 @@ export function createGraphRoutes(registry: GraphRegistry, dataDir: string) {
     await Bun.write(filePath, code);
 
     try {
-      const graphEnv = deployEnv ?? registry.getEnv(name);
-      const graphs = await loadGraphsFromFile(filePath, graphEnv);
-      const exportNames = Object.keys(graphs);
+      const builders = await loadBuildersFromFile(filePath);
+      const exportNames = Object.keys(builders);
 
       if (exportNames.length === 0) {
         return c.json(
@@ -75,7 +74,7 @@ export function createGraphRoutes(registry: GraphRegistry, dataDir: string) {
       await registry.register(name, fileName, exportNames, deployEnv);
 
       const primaryExport = exportNames[0]!;
-      registry.setGraphInstance(name, graphs[primaryExport]!);
+      registry.setGraphBuilder(name, builders[primaryExport]!);
 
       return c.json({
         message: `Graph '${name}' deployed and activated`,
@@ -94,16 +93,15 @@ export function createGraphRoutes(registry: GraphRegistry, dataDir: string) {
       return c.json({ error: "Graph not found" }, 404);
     }
 
-    if (entry.active && registry.getGraphInstance(name)) {
+    if (entry.active && registry.getGraphBuilder(name)) {
       return c.json({ message: `Graph '${name}' is already active` });
     }
 
     const filePath = registry.getFilePath(name)!;
     try {
-      const graphEnv = registry.getEnv(name);
-      const graphs = await loadGraphsFromFile(filePath, graphEnv);
+      const builders = await loadBuildersFromFile(filePath);
       const primaryExport = entry.exports[0]!;
-      registry.setGraphInstance(name, graphs[primaryExport]!);
+      registry.setGraphBuilder(name, builders[primaryExport]!);
       await registry.activate(name);
       return c.json({ message: `Graph '${name}' activated` });
     } catch (err: any) {
@@ -176,22 +174,8 @@ export function createGraphRoutes(registry: GraphRegistry, dataDir: string) {
 
     await registry.setEnv(name, vars);
 
-    if (entry.active) {
-      const filePath = registry.getFilePath(name)!;
-      try {
-        const graphEnv = registry.getEnv(name);
-        const graphs = await loadGraphsFromFile(filePath, graphEnv);
-        const primaryExport = entry.exports[0]!;
-        if (graphs[primaryExport]) {
-          registry.setGraphInstance(name, graphs[primaryExport]);
-        }
-      } catch (err: any) {
-        return c.json({
-          message: "Env vars saved but graph reload failed",
-          error: err.message,
-        }, 500);
-      }
-    }
+    // No graph reload needed — builder(env) is called fresh on each job execution,
+    // so updated env vars are picked up automatically.
 
     return c.json({ message: `Env vars updated for '${name}'` });
   });

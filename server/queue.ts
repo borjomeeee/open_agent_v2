@@ -198,10 +198,13 @@ export class GraphQueue {
     this.activeRuns.set(runKey, controller);
 
     try {
-      const graph = this.registry.getGraphInstance(graphName);
-      if (!graph) {
+      const builder = this.registry.getGraphBuilder(graphName);
+      if (!builder) {
         throw new Error(`Graph '${graphName}' is registered but not loaded`);
       }
+
+      const env = this.registry.getEnv(graphName);
+      const graph = builder(env);
 
       const config = withLoggingCallbacks(graphName, {
         signal: controller.signal,

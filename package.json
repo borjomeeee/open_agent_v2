@@ -16,7 +16,8 @@
   "scripts": {
     "test": "bun test tests/integration",
     "test:e2e": "bun test tests/e2e",
-    "test:all": "bun test tests"
+    "test:all": "bun test tests",
+    "dev": "bunx @langchain/langgraph-cli dev"
   },
   "dependencies": {
     "@clack/prompts": "^1.1.0",
