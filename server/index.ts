@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { mkdir } from "fs/promises";
 import { GraphRegistry } from "./registry.ts";
 import { GraphQueue } from "./queue.ts";
-import { loadGraphsFromFile } from "./loader.ts";
+import { validateGraphFile } from "./loader.ts";
 import { ChannelManager } from "./channels/manager.ts";
 import { createGraphRoutes } from "./routes/graphs.ts";
 import { createChannelRoutes, createIngressRoutes } from "./routes/channels.ts";
@@ -36,7 +36,7 @@ export async function createServer(dataDir: string) {
   app.get("/health", (c) => c.json({ status: "ok" }));
 
   app.route("/hooks", createIngressRoutes(channelManager));
-  app.route("/api/graphs", createGraphRoutes(registry, dataDir));
+  app.route("/api/graphs", createGraphRoutes(registry, dataDir, queue));
   app.route("/api/channels", createChannelRoutes(channelManager));
 
   app.get("/api/queue/stats", (c) => c.json(queue.stats()));
@@ -69,15 +69,11 @@ async function loadActiveGraphs(registry: GraphRegistry) {
     if (!filePath) continue;
 
     try {
-      const graphEnv = registry.getEnv(entry.name);
-      const graphs = await loadGraphsFromFile(filePath, graphEnv);
-      const primaryExport = entry.exports[0]!;
-      if (graphs[primaryExport]) {
-        registry.setGraphInstance(entry.name, graphs[primaryExport]);
-        log.info({ graph: entry.name }, "Loaded graph");
-      }
+      await validateGraphFile(filePath);
+      log.info({ graph: entry.name }, "Validated graph file");
     } catch (err: any) {
-      log.error({ graph: entry.name, err }, "Failed to load graph");
+      log.warn({ graph: entry.name, err }, "Graph file invalid or missing; marking inactive");
+      await registry.deactivate(entry.name);
     }
   }
 }

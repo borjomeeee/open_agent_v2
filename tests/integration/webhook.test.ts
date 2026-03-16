@@ -15,7 +15,11 @@ async function computeHmac(secret: string, body: string): Promise<string> {
     false,
     ["sign"],
   );
-  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body));
+  const sig = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    new TextEncoder().encode(body),
+  );
   return Array.from(new Uint8Array(sig))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
@@ -61,7 +65,7 @@ describe("Webhook ingress", () => {
     expect(res.status).toBe(200);
     const body = await json(res);
     expect(body.result).toBeDefined();
-    expect(body.result.echo).toEqual({ message: "hello" });
+    expect(body.result.echo).toEqual({ input: [{ message: "hello" }] });
   });
 
   test("webhook with thread_id passes it through", async () => {
@@ -73,6 +77,7 @@ describe("Webhook ingress", () => {
     });
     expect(res.status).toBe(200);
     const body = await json(res);
+
     expect(body.result.echo).toHaveProperty("thread_id", "t1");
   });
 
@@ -119,7 +124,7 @@ describe("Webhook ingress", () => {
     });
     expect(res.status).toBe(200);
     const body = await json(res);
-    expect(body.result.echo).toEqual({ message: "signed" });
+    expect(body.result.echo).toEqual({ input: [{ message: "signed" }] });
   });
 
   test("HMAC webhook rejects missing signature", async () => {

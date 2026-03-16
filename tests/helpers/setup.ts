@@ -11,38 +11,38 @@ export interface TestContext {
 
 /**
  * Generates JS source for a mock graph that echoes its input.
- * The mock conforms to the CompiledGraph interface (invoke + stream).
+ * Exports a builder function () => CompiledGraph as required by the runtime.
  */
 export function mockGraphCode(opts?: { fail?: boolean }): string {
   if (opts?.fail) {
     return `
-      module.exports.graph = {
+      module.exports.builder = () => ({
         invoke: async (input, config) => { throw new Error("graph-error"); },
         stream: async function* (input, config) { yield input; },
-      };
+      });
     `;
   }
 
   return `
-    module.exports.graph = {
+    module.exports.builder = () => ({
       invoke: async (input, config) => {
         return { echo: input, ts: Date.now() };
       },
       stream: async function* (input, config) {
         yield { echo: input };
       },
-    };
+    });
   `;
 }
 
 /**
- * Builder-pattern mock: exports a builder(env) function instead of a direct graph.
+ * Builder-pattern mock: same shape as mockGraphCode, kept for explicit builder tests.
  */
 export function mockBuilderGraphCode(): string {
   return `
-    module.exports.builder = (env) => ({
+    module.exports.builder = () => ({
       invoke: async (input, config) => {
-        return { echo: input, env };
+        return { echo: input };
       },
       stream: async function* (input, config) {
         yield { echo: input };

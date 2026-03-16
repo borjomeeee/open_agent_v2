@@ -1,10 +1,11 @@
 import { Hono } from "hono";
 import { join } from "path";
 import type { GraphRegistry } from "../registry.ts";
-import { loadBuildersFromFile } from "../loader.ts";
+import type { GraphQueue } from "../queue.ts";
+import { validateGraphFile } from "../loader.ts";
 import { decryptEnvVars } from "../../lib/crypto.ts";
 
-export function createGraphRoutes(registry: GraphRegistry, dataDir: string) {
+export function createGraphRoutes(registry: GraphRegistry, dataDir: string, queue: GraphQueue) {
   const app = new Hono();
 
   app.get("/", (c) => {
@@ -58,14 +59,13 @@ export function createGraphRoutes(registry: GraphRegistry, dataDir: string) {
     await Bun.write(filePath, code);
 
     try {
-      const builders = await loadBuildersFromFile(filePath);
-      const exportNames = Object.keys(builders);
+      const exportNames = await validateGraphFile(filePath);
 
       if (exportNames.length === 0) {
         return c.json(
           {
             error:
-              "No compiled LangGraph instances found in exports. Make sure your workflow exports a compiled StateGraph or a builder function.",
+              "No builder functions found in exports. Make sure your workflow exports a builder function.",
           },
           400,
         );
@@ -73,13 +73,10 @@ export function createGraphRoutes(registry: GraphRegistry, dataDir: string) {
 
       await registry.register(name, fileName, exportNames, deployEnv);
 
-      const primaryExport = exportNames[0]!;
-      registry.setGraphBuilder(name, builders[primaryExport]!);
-
       return c.json({
         message: `Graph '${name}' deployed and activated`,
         exports: exportNames,
-        activeExport: primaryExport,
+        activeExport: exportNames[0]!,
       });
     } catch (err: any) {
       return c.json({ error: `Failed to load graph: ${err.message}` }, 500);
@@ -93,15 +90,13 @@ export function createGraphRoutes(registry: GraphRegistry, dataDir: string) {
       return c.json({ error: "Graph not found" }, 404);
     }
 
-    if (entry.active && registry.getGraphBuilder(name)) {
+    if (entry.active) {
       return c.json({ message: `Graph '${name}' is already active` });
     }
 
     const filePath = registry.getFilePath(name)!;
     try {
-      const builders = await loadBuildersFromFile(filePath);
-      const primaryExport = entry.exports[0]!;
-      registry.setGraphBuilder(name, builders[primaryExport]!);
+      await validateGraphFile(filePath);
       await registry.activate(name);
       return c.json({ message: `Graph '${name}' activated` });
     } catch (err: any) {
@@ -121,6 +116,33 @@ export function createGraphRoutes(registry: GraphRegistry, dataDir: string) {
 
     await registry.deactivate(name);
     return c.json({ message: `Graph '${name}' deactivated` });
+  });
+
+  app.post("/:name/run", async (c) => {
+    const { name } = c.req.param();
+    const entry = registry.getEntry(name);
+    if (!entry) {
+      return c.json({ error: "Graph not found" }, 404);
+    }
+    if (!entry.active) {
+      return c.json({ error: `Graph '${name}' is not active` }, 409);
+    }
+
+    let body: any = {};
+    try {
+      body = await c.req.json();
+    } catch {
+      // no body is fine
+    }
+
+    const { input = "", thread_id } = body as { input?: any; thread_id?: string };
+
+    try {
+      const result = await queue.enqueueAndWait(name, input, thread_id);
+      return c.json({ result });
+    } catch (err: any) {
+      return c.json({ error: err.message }, 500);
+    }
   });
 
   // ─── Per-graph env management ──────────────────────────────────
@@ -174,8 +196,8 @@ export function createGraphRoutes(registry: GraphRegistry, dataDir: string) {
 
     await registry.setEnv(name, vars);
 
-    // No graph reload needed — builder(env) is called fresh on each job execution,
-    // so updated env vars are picked up automatically.
+    // No graph reload needed — builder() is called fresh inside a Worker on each
+    // job execution, so env vars stored in the registry are always up to date.
 
     return c.json({ message: `Env vars updated for '${name}'` });
   });

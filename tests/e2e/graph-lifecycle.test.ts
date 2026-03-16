@@ -24,7 +24,7 @@ describe("E2E: Graph lifecycle", () => {
     expect(deployRes.status).toBe(200);
     const deployBody = await json(deployRes);
     expect(deployBody.message).toContain("deployed and activated");
-    expect(deployBody.exports).toContain("graph");
+    expect(deployBody.exports).toContain("builder");
 
     const listRes = await e2eFetch(ctx.baseUrl, "/api/graphs");
     expect(listRes.status).toBe(200);

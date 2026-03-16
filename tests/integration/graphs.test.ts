@@ -43,8 +43,8 @@ describe("Graph routes", () => {
     expect(res.status).toBe(200);
     const body = await json(res);
     expect(body.message).toContain("deployed and activated");
-    expect(body.exports).toContain("graph");
-    expect(body.activeExport).toBe("graph");
+    expect(body.exports).toContain("builder");
+    expect(body.activeExport).toBe("builder");
   });
 
   test("deploy requires name and code", async () => {
@@ -61,7 +61,7 @@ describe("Graph routes", () => {
     const res = await deployMockGraph(ctx.app, "bad", "module.exports.foo = 42;");
     expect(res.status).toBe(400);
     const body = await json(res);
-    expect(body.error).toContain("No compiled LangGraph instances");
+    expect(body.error).toContain("No builder functions found");
   });
 
   test("deploying same name overwrites previous graph", async () => {
@@ -90,7 +90,7 @@ describe("Graph routes", () => {
     const body = await json(res);
     expect(body.name).toBe("echo");
     expect(body.active).toBe(true);
-    expect(body.exports).toContain("graph");
+    expect(body.exports).toContain("builder");
   });
 
   test("GET /api/graphs lists deployed graphs", async () => {

@@ -1,5 +1,4 @@
 import { join } from "path";
-import type { GraphBuilder } from "./loader.ts";
 
 export interface GraphEntry {
   name: string;
@@ -17,7 +16,6 @@ export interface RegistryData {
 export class GraphRegistry {
   private data: RegistryData = { graphs: {} };
   private registryPath: string;
-  private graphBuilders: Map<string, GraphBuilder> = new Map();
 
   constructor(private dataDir: string) {
     this.registryPath = join(dataDir, "registry.json");
@@ -61,7 +59,6 @@ export class GraphRegistry {
     const entry = this.data.graphs[name];
     if (!entry) return false;
     entry.active = false;
-    this.graphBuilders.delete(name);
     await this.save();
     return true;
   }
@@ -77,7 +74,6 @@ export class GraphRegistry {
       await unlink(filePath);
     }
 
-    this.graphBuilders.delete(name);
     delete this.data.graphs[name];
     await this.save();
     return true;
@@ -89,14 +85,6 @@ export class GraphRegistry {
 
   listAll(): GraphEntry[] {
     return Object.values(this.data.graphs);
-  }
-
-  setGraphBuilder(name: string, builder: GraphBuilder) {
-    this.graphBuilders.set(name, builder);
-  }
-
-  getGraphBuilder(name: string): GraphBuilder | undefined {
-    return this.graphBuilders.get(name);
   }
 
   getFilePath(name: string): string | undefined {
@@ -116,5 +104,4 @@ export class GraphRegistry {
   getEnv(name: string): Record<string, string> {
     return this.data.graphs[name]?.env ?? {};
   }
-
 }

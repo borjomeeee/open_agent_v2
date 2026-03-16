@@ -81,14 +81,14 @@ export async function e2eDeployGraph(
   const code =
     opts?.code ??
     `
-    module.exports.graph = {
+    module.exports.builder = () => ({
       invoke: async (input, config) => {
         return { echo: input, ts: Date.now() };
       },
       stream: async function* (input, config) {
         yield { echo: input };
       },
-    };
+    });
   `;
 
   const headers: Record<string, string> = {};
@@ -102,16 +102,16 @@ export async function e2eDeployGraph(
 }
 
 export const FAILING_GRAPH_CODE = `
-  module.exports.graph = {
+  module.exports.builder = () => ({
     invoke: async (input, config) => { throw new Error("graph-error"); },
     stream: async function* (input, config) { yield input; },
-  };
+  });
 `;
 
 export const BUILDER_GRAPH_CODE = `
-  module.exports.builder = (env) => ({
+  module.exports.builder = () => ({
     invoke: async (input, config) => {
-      return { echo: input, env };
+      return { echo: input };
     },
     stream: async function* (input, config) {
       yield { echo: input };

@@ -2,9 +2,8 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtemp, rm } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
-import { GraphQueue } from "../../server/queue.ts";
+import { GraphQueue, type JobExecutor } from "../../server/queue.ts";
 import { GraphRegistry } from "../../server/registry.ts";
-import type { CompiledGraph } from "../../server/loader.ts";
 
 interface Deferred<T = any> {
   promise: Promise<T>;
@@ -22,41 +21,47 @@ function deferred<T = any>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
-interface MockGraphHandle {
-  graph: CompiledGraph;
-  invocations: { input: any; config: any }[];
-  setHandler: (fn: (input: any, config: any) => Promise<any>) => void;
+interface MockExecutorHandle {
+  executor: JobExecutor;
+  invocations: { input: any; graphName: string; threadId?: string }[];
+  setHandler: (fn: (input: any, graphName: string, threadId?: string) => Promise<any>) => void;
 }
 
-function createMockGraph(): MockGraphHandle {
-  let handler: (input: any, config: any) => Promise<any> = async (input) => ({ echo: input });
-  const invocations: { input: any; config: any }[] = [];
+function createMockExecutor(): MockExecutorHandle {
+  let handler: (input: any, graphName: string, threadId?: string) => Promise<any> = async (input) => ({ echo: input });
+  const invocations: { input: any; graphName: string; threadId?: string }[] = [];
 
-  const graph: CompiledGraph = {
-    invoke: async (input: any, config: any) => {
-      invocations.push({ input, config });
-      return handler(input, config);
-    },
-    stream: async function* (input: any) {
-      yield { echo: input };
-    },
+  const executor: JobExecutor = async ({ input, graphName, threadId, env: _env, signal }) => {
+    invocations.push({ input, graphName, threadId });
+    const result = await Promise.race([
+      handler(input, graphName, threadId),
+      new Promise<never>((_, reject) =>
+        signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true }),
+      ),
+    ]);
+    return result;
   };
 
   return {
-    graph,
+    executor,
     invocations,
     setHandler: (fn) => { handler = fn; },
   };
 }
 
-async function setupQueue(opts?: { maxConcurrency?: number; maxRetries?: number }) {
+async function setupQueue(opts?: { maxConcurrency?: number; maxRetries?: number; executor?: JobExecutor }) {
   const dataDir = await mkdtemp(join(tmpdir(), "openagent-queue-test-"));
   const registry = new GraphRegistry(dataDir);
   await registry.init();
 
+  // Write a placeholder file so registry.getFilePath() resolves to an existing path
+  await Bun.write(join(dataDir, "echo.js"), "module.exports.builder = () => ({});");
+  await registry.register("echo", "echo.js", ["builder"]);
+
   const queue = new GraphQueue(dataDir, registry, {
     maxConcurrency: opts?.maxConcurrency ?? 1,
     maxRetries: opts?.maxRetries ?? 0,
+    executor: opts?.executor,
   });
 
   return { dataDir, registry, queue };
@@ -73,29 +78,23 @@ describe("Queue batching", () => {
   });
 
   test("single job executes normally with original input", async () => {
-    ({ dataDir, registry, queue } = await setupQueue());
-
-    const mock = createMockGraph();
-    await registry.register("echo", "echo.js", ["graph"]);
-    registry.setGraphInstance("echo", mock.graph);
+    const mock = createMockExecutor();
+    ({ dataDir, registry, queue } = await setupQueue({ executor: mock.executor }));
 
     const result = await queue.enqueueAndWait("echo", { msg: "hello" });
-    expect(result).toEqual({ echo: { msg: "hello" } });
+    expect(result).toEqual({ echo: [{ msg: "hello" }] });
     expect(mock.invocations.length).toBe(1);
-    expect(mock.invocations[0]!.input).toEqual({ msg: "hello" });
+    expect(mock.invocations[0]!.input).toEqual([{ msg: "hello" }]);
   });
 
   test("batches pending jobs for same graph+thread when worker is busy", async () => {
-    ({ dataDir, registry, queue } = await setupQueue({ maxConcurrency: 1 }));
-
-    const mock = createMockGraph();
-    await registry.register("echo", "echo.js", ["graph"]);
-    registry.setGraphInstance("echo", mock.graph);
+    const mock = createMockExecutor();
+    ({ dataDir, registry, queue } = await setupQueue({ maxConcurrency: 1, executor: mock.executor }));
 
     const gate = deferred();
 
     mock.setHandler(async (input) => {
-      if (input.msg === "blocker") {
+      if (Array.isArray(input) && input[0]?.msg === "blocker") {
         await gate.promise;
         return { echo: input };
       }
@@ -120,23 +119,18 @@ describe("Queue batching", () => {
     expect(mock.invocations.length).toBe(2);
 
     const batchedCall = mock.invocations[1]!;
-    expect(batchedCall.input).toEqual({
-      inputs: [{ msg: "event-1" }, { msg: "event-2" }],
-    });
+    expect(batchedCall.input).toEqual([{ msg: "event-1" }, { msg: "event-2" }]);
 
     expect(r1).toEqual(r2);
   });
 
   test("3 pending jobs are batched into single execution", async () => {
-    ({ dataDir, registry, queue } = await setupQueue({ maxConcurrency: 1 }));
-
-    const mock = createMockGraph();
-    await registry.register("echo", "echo.js", ["graph"]);
-    registry.setGraphInstance("echo", mock.graph);
+    const mock = createMockExecutor();
+    ({ dataDir, registry, queue } = await setupQueue({ maxConcurrency: 1, executor: mock.executor }));
 
     const gate = deferred();
     mock.setHandler(async (input) => {
-      if (input.msg === "blocker") {
+      if (Array.isArray(input) && input[0]?.msg === "blocker") {
         await gate.promise;
       }
       return { echo: input };
@@ -157,24 +151,19 @@ describe("Queue batching", () => {
     const [r1, r2, r3] = await Promise.all([p1, p2, p3]);
 
     const batchedCall = mock.invocations[1]!;
-    expect(batchedCall.input).toEqual({
-      inputs: [{ msg: "a" }, { msg: "b" }, { msg: "c" }],
-    });
+    expect(batchedCall.input).toEqual([{ msg: "a" }, { msg: "b" }, { msg: "c" }]);
 
     expect(r1).toEqual(r2);
     expect(r2).toEqual(r3);
   });
 
   test("jobs for different threads are NOT batched together", async () => {
-    ({ dataDir, registry, queue } = await setupQueue({ maxConcurrency: 1 }));
-
-    const mock = createMockGraph();
-    await registry.register("echo", "echo.js", ["graph"]);
-    registry.setGraphInstance("echo", mock.graph);
+    const mock = createMockExecutor();
+    ({ dataDir, registry, queue } = await setupQueue({ maxConcurrency: 1, executor: mock.executor }));
 
     const gate = deferred();
     mock.setHandler(async (input) => {
-      if (input.msg === "blocker") {
+      if (Array.isArray(input) && input[0]?.msg === "blocker") {
         await gate.promise;
       }
       return { echo: input };
@@ -191,20 +180,17 @@ describe("Queue batching", () => {
     await Promise.all([pA, pB]);
 
     expect(mock.invocations.length).toBe(3);
-    expect(mock.invocations[1]!.input).toEqual({ msg: "for-thread-2" });
-    expect(mock.invocations[2]!.input).toEqual({ msg: "for-thread-3" });
+    expect(mock.invocations[1]!.input).toEqual([{ msg: "for-thread-2" }]);
+    expect(mock.invocations[2]!.input).toEqual([{ msg: "for-thread-3" }]);
   });
 
   test("jobs without thread_id for same graph are still batched", async () => {
-    ({ dataDir, registry, queue } = await setupQueue({ maxConcurrency: 1 }));
-
-    const mock = createMockGraph();
-    await registry.register("echo", "echo.js", ["graph"]);
-    registry.setGraphInstance("echo", mock.graph);
+    const mock = createMockExecutor();
+    ({ dataDir, registry, queue } = await setupQueue({ maxConcurrency: 1, executor: mock.executor }));
 
     const gate = deferred();
     mock.setHandler(async (input) => {
-      if (input.msg === "blocker") {
+      if (Array.isArray(input) && input[0]?.msg === "blocker") {
         await gate.promise;
       }
       return { echo: input };
@@ -220,27 +206,22 @@ describe("Queue batching", () => {
     await blockerPromise;
     await Promise.all([p1, p2]);
 
-    const batchedCalls = mock.invocations.filter((i) => i.input.msg !== "blocker");
+    const batchedCalls = mock.invocations.filter((i) => !i.input?.[0]?.msg?.includes("blocker"));
     expect(batchedCalls.length).toBe(1);
-    expect(batchedCalls[0]!.input).toEqual({
-      inputs: [{ msg: "no-thread-1" }, { msg: "no-thread-2" }],
-    });
+    expect(batchedCalls[0]!.input).toEqual([{ msg: "no-thread-1" }, { msg: "no-thread-2" }]);
   });
 
   test("all batched waiters receive the same result", async () => {
-    ({ dataDir, registry, queue } = await setupQueue({ maxConcurrency: 1 }));
-
-    const mock = createMockGraph();
-    await registry.register("echo", "echo.js", ["graph"]);
-    registry.setGraphInstance("echo", mock.graph);
+    const mock = createMockExecutor();
+    ({ dataDir, registry, queue } = await setupQueue({ maxConcurrency: 1, executor: mock.executor }));
 
     const gate = deferred();
     mock.setHandler(async (input) => {
-      if (input.msg === "blocker") {
+      if (Array.isArray(input) && input[0]?.msg === "blocker") {
         await gate.promise;
         return { done: "blocker" };
       }
-      return { batched: true, count: input.inputs?.length ?? 1 };
+      return { batched: true, count: input.length };
     });
 
     const blockerPromise = queue.enqueueAndWait("echo", { msg: "blocker" }, "t1");
@@ -261,26 +242,20 @@ describe("Queue batching", () => {
   });
 
   test("batching only happens when worker is busy, not when idle", async () => {
-    ({ dataDir, registry, queue } = await setupQueue({ maxConcurrency: 5 }));
-
-    const mock = createMockGraph();
-    await registry.register("echo", "echo.js", ["graph"]);
-    registry.setGraphInstance("echo", mock.graph);
+    const mock = createMockExecutor();
+    ({ dataDir, registry, queue } = await setupQueue({ maxConcurrency: 5, executor: mock.executor }));
 
     const r1 = await queue.enqueueAndWait("echo", { msg: "first" }, "thread-1");
     const r2 = await queue.enqueueAndWait("echo", { msg: "second" }, "thread-1");
 
     expect(mock.invocations.length).toBe(2);
-    expect(mock.invocations[0]!.input).toEqual({ msg: "first" });
-    expect(mock.invocations[1]!.input).toEqual({ msg: "second" });
+    expect(mock.invocations[0]!.input).toEqual([{ msg: "first" }]);
+    expect(mock.invocations[1]!.input).toEqual([{ msg: "second" }]);
   });
 
   test("queue stats reflect pending and active counts", async () => {
-    ({ dataDir, registry, queue } = await setupQueue({ maxConcurrency: 1 }));
-
-    const mock = createMockGraph();
-    await registry.register("echo", "echo.js", ["graph"]);
-    registry.setGraphInstance("echo", mock.graph);
+    const mock = createMockExecutor();
+    ({ dataDir, registry, queue } = await setupQueue({ maxConcurrency: 1, executor: mock.executor }));
 
     expect(queue.stats()).toEqual({ active: 0, pending: 0 });
 

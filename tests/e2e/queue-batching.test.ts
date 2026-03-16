@@ -8,17 +8,18 @@ import {
 } from "../helpers/e2e-setup.ts";
 
 const SLOW_GRAPH_CODE = `
-  module.exports.graph = {
+  module.exports.builder = () => ({
     invoke: async (input, config) => {
-      if (input.delay) {
-        await new Promise(r => setTimeout(r, input.delay));
+      const payload = Array.isArray(input.input) ? input.input[0] : input.input;
+      if (payload?.delay) {
+        await new Promise(r => setTimeout(r, payload.delay));
       }
-      return { echo: input, ts: Date.now() };
+      return { echo: input.input, ts: Date.now() };
     },
     stream: async function* (input, config) {
       yield { echo: input };
     },
-  };
+  });
 `;
 
 describe("E2E: Queue batching over HTTP", () => {

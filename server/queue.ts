@@ -1,9 +1,48 @@
 import { Database } from "bun:sqlite";
 import { join } from "path";
 import type { GraphRegistry } from "./registry.ts";
-import { logger, withLoggingCallbacks } from "./logger.ts";
+import { logger } from "./logger.ts";
 
 const log = logger.child({ module: "queue" });
+
+export interface JobExecutorParams {
+  filePath: string;
+  exportName: string;
+  graphName: string;
+  input: unknown;
+  threadId?: string;
+  env: Record<string, string>;
+  signal: AbortSignal;
+}
+
+export type JobExecutor = (params: JobExecutorParams) => Promise<unknown>;
+
+function workerExecutor({ filePath, exportName, graphName, input, threadId, env, signal }: JobExecutorParams): Promise<unknown> {
+  const worker = new Worker(new URL("./graph-worker.ts", import.meta.url).href);
+
+  return new Promise<unknown>((resolve, reject) => {
+    signal.addEventListener("abort", () => {
+      worker.terminate();
+      reject(new DOMException("Run aborted", "AbortError"));
+    }, { once: true });
+
+    worker.onmessage = (e) => {
+      worker.terminate();
+      if (e.data.ok) {
+        resolve(e.data.result);
+      } else {
+        reject(new Error(e.data.error));
+      }
+    };
+
+    worker.onerror = (e) => {
+      worker.terminate();
+      reject(e);
+    };
+
+    worker.postMessage({ filePath, exportName, graphName, input, threadId, env });
+  });
+}
 
 interface JobRow {
   id: string;
@@ -35,9 +74,16 @@ export class GraphQueue {
   private callbacks = new Map<string, JobCallbacks>();
   private waiters = new Map<string, { resolve: (v: any) => void; reject: (e: Error) => void }>();
   private registry: GraphRegistry;
+  private executor: JobExecutor;
 
-  constructor(dataDir: string, registry: GraphRegistry, opts?: { maxConcurrency?: number; maxRetries?: number; retentionHours?: number }) {
+  constructor(dataDir: string, registry: GraphRegistry, opts?: {
+    maxConcurrency?: number;
+    maxRetries?: number;
+    retentionHours?: number;
+    executor?: JobExecutor;
+  }) {
     this.registry = registry;
+    this.executor = opts?.executor ?? workerExecutor;
     this.maxConcurrency = opts?.maxConcurrency ?? (parseInt(process.env.MAX_CONCURRENT_RUNS || "") || 5);
     this.maxRetries = opts?.maxRetries ?? (parseInt(process.env.MAX_JOB_RETRIES || "") || 2);
     this.retentionMs = (opts?.retentionHours ?? (parseInt(process.env.JOB_RETENTION_HOURS || "") || 24)) * 60 * 60 * 1000;
@@ -198,20 +244,24 @@ export class GraphQueue {
     this.activeRuns.set(runKey, controller);
 
     try {
-      const builder = this.registry.getGraphBuilder(graphName);
-      if (!builder) {
-        throw new Error(`Graph '${graphName}' is registered but not loaded`);
+      const entry = this.registry.getEntry(graphName);
+      if (!entry || !entry.active) {
+        throw new Error(`Graph '${graphName}' is registered but not active`);
       }
 
+      const filePath = this.registry.getFilePath(graphName)!;
+      const exportName = entry.exports[0]!;
       const env = this.registry.getEnv(graphName);
-      const graph = builder(env);
 
-      const config = withLoggingCallbacks(graphName, {
+      const result = await this.executor({
+        filePath,
+        exportName,
+        graphName,
+        input,
+        threadId,
+        env,
         signal: controller.signal,
-        ...(threadId && { configurable: { thread_id: threadId } }),
       });
-
-      const result = await graph.invoke({ input }, config);
 
       const now = new Date().toISOString();
       const placeholders = jobIds.map(() => "?").join(",");

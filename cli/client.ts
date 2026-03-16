@@ -12,6 +12,7 @@ import {
 import { handleCancel, promptSelectServer, promptSelectGraph } from "./prompts";
 import { registerEnvCommands } from "./env";
 import { registerChannelCommands } from "./channels";
+import { registerChatCommands } from "./chat";
 
 export function registerClientCommands(program: Command) {
   const clientCmd = program.command("client").description("Client operations");
@@ -439,4 +440,5 @@ export function registerClientCommands(program: Command) {
 
   registerEnvCommands(clientCmd);
   registerChannelCommands(clientCmd);
+  registerChatCommands(clientCmd);
 }
