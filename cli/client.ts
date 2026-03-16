@@ -9,7 +9,7 @@ import {
   apiHeaders,
   parseEnvFile,
 } from "./config";
-import { handleCancel, promptSelectServer, promptSelectGraph } from "./prompts";
+import { handleCancel, promptSelectServer, promptSelectGraph, promptFilePick } from "./prompts";
 import { registerEnvCommands } from "./env";
 import { registerChannelCommands } from "./channels";
 import { registerChatCommands } from "./chat";
@@ -227,159 +227,132 @@ export function registerClientCommands(program: Command) {
     });
 
   clientCmd
-    .command("start [fileOrName]")
-    .description(
-      "Deploy and activate a graph (pass .ts file) or activate an existing one (pass name)",
-    )
+    .command("deploy [file]")
+    .description("Bundle and deploy a graph from a .ts or .js file")
     .option("-n, --name <name>", "Graph name (defaults to filename without extension)")
     .option("-e, --env <path>", "Path to .env file with graph-specific variables")
     .option("-s, --server <url>", "Server URL (overrides saved config)")
     .option("-k, --key <key>", "API key")
-    .action(async (fileOrNameArg: string | undefined, opts) => {
-      let fileOrName = fileOrNameArg;
+    .action(async (fileArg: string | undefined, opts) => {
+      let filePath: string;
 
-      if (!fileOrName) {
-        const mode = await p.select({
-          message: "What would you like to do?",
-          options: [
-            { value: "deploy" as const, label: "Deploy a file", hint: "bundle and deploy a .ts/.js file" },
-            { value: "activate" as const, label: "Activate an existing graph", hint: "start a previously deployed graph" },
-          ],
+      if (fileArg) {
+        filePath = resolve(fileArg);
+      } else {
+        p.intro("Deploy a graph");
+        const picked = await promptFilePick("Select the graph file (.ts or .js)", {
+          allowedExtensions: [".ts", ".js"],
+          startDir: resolve(process.cwd(), "workflows"),
         });
-        handleCancel(mode);
+        filePath = picked;
+      }
 
-        if (mode === "deploy") {
-          const filePath = await p.text({
-            message: "Path to the graph file (.ts or .js)",
-            placeholder: "./workflows/my-graph.ts",
-            validate: (v) => {
-              if (!v) return "File path is required";
-              if (!v.endsWith(".ts") && !v.endsWith(".js")) return "File must be .ts or .js";
-              return undefined;
-            },
+      const graphName = opts.name || basename(filePath).replace(/\.(ts|js)$/, "");
+
+      if (!opts.name) {
+        const nameOverride = await p.text({
+          message: "Graph name",
+          initialValue: graphName,
+          validate: (v) => (!v ? "Name is required" : undefined),
+        });
+        handleCancel(nameOverride);
+        if (nameOverride && nameOverride !== graphName) opts.name = nameOverride;
+      }
+
+      let envVars: Record<string, string> | undefined;
+      if (opts.env) {
+        envVars = await parseEnvFile(resolve(opts.env));
+      } else {
+        const wantEnv = await p.confirm({
+          message: "Include a .env file?",
+          initialValue: false,
+        });
+        handleCancel(wantEnv);
+        if (wantEnv) {
+          const envFile = await promptFilePick("Select the .env file", {
+            startDir: resolve(process.cwd(), "workflows"),
           });
-          handleCancel(filePath);
-          fileOrName = filePath;
-
-          if (!opts.name) {
-            const nameOverride = await p.text({
-              message: "Graph name (leave empty to use filename)",
-              placeholder: basename(filePath).replace(/\.(ts|js)$/, ""),
-            });
-            handleCancel(nameOverride);
-            if (nameOverride) opts.name = nameOverride;
-          }
-
-          if (!opts.env) {
-            const wantEnv = await p.confirm({
-              message: "Include a .env file?",
-              initialValue: false,
-            });
-            handleCancel(wantEnv);
-            if (wantEnv) {
-              const envPath = await p.text({
-                message: "Path to .env file",
-                placeholder: "./.env",
-                validate: (v) => (!v ? "Path is required" : undefined),
-              });
-              handleCancel(envPath);
-              opts.env = envPath;
-            }
-          }
-        } else {
-          const conn = await getConnection(opts);
-          fileOrName = await promptSelectGraph(conn, "all");
+          envVars = await parseEnvFile(envFile);
         }
       }
+
+      if (envVars && Object.keys(envVars).length === 0) envVars = undefined;
 
       const conn = await getConnection(opts);
-      const isFile = fileOrName!.endsWith(".ts") || fileOrName!.endsWith(".js");
+      const finalName = opts.name || basename(filePath).replace(/\.(ts|js)$/, "");
 
-      if (isFile) {
-        const filePath = resolve(fileOrName!);
-        const graphName =
-          opts.name || basename(filePath).replace(/\.(ts|js)$/, "");
+      console.log(`Bundling ${filePath}...`);
 
-        let envVars: Record<string, string> | undefined;
-        if (opts.env) {
-          const envPath = resolve(opts.env);
-          envVars = await parseEnvFile(envPath);
-          if (Object.keys(envVars).length === 0) {
-            envVars = undefined;
-          }
-        }
+      const result = await Bun.build({
+        entrypoints: [filePath],
+        target: "bun",
+        format: "esm",
+        external: ["@langchain/*", "langchain", "zod"],
+      });
 
-        console.log(`Bundling ${filePath}...`);
-
-        const result = await Bun.build({
-          entrypoints: [filePath],
-          target: "bun",
-          format: "esm",
-          external: [
-            "@langchain/*",
-            "langchain",
-            "zod",
-          ],
-        });
-
-        if (!result.success) {
-          console.error("Bundle failed:");
-          for (const log of result.logs) {
-            console.error(`  ${log}`);
-          }
-          process.exit(1);
-        }
-
-        const bundledCode = await result.outputs[0]!.text();
-        console.log(
-          `Bundle complete (${(bundledCode.length / 1024).toFixed(1)} KB)`,
-        );
-
-        const deployBody: Record<string, any> = { name: graphName, code: bundledCode };
-        const headers = apiHeaders(conn.key);
-
-        if (envVars) {
-          const encrypted = !!conn.encryptionKey;
-          console.log(`Including ${Object.keys(envVars).length} env var(s)${encrypted ? " (encrypted)" : ""} in deploy...`);
-          if (conn.encryptionKey) {
-            deployBody.env = encryptEnvVars(envVars, conn.encryptionKey);
-            headers["X-Env-Encrypted"] = "true";
-          } else {
-            deployBody.env = envVars;
-          }
-        }
-
-        console.log(`Deploying as '${graphName}'...`);
-        const res = await fetch(`${conn.url}/api/graphs/deploy`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(deployBody),
-        });
-
-        const body = await res.json();
-        if (!res.ok) {
-          console.error(`Deploy failed: ${(body as any).error}`);
-          process.exit(1);
-        }
-
-        console.log((body as any).message);
-        if ((body as any).exports) {
-          console.log(`  exports: ${(body as any).exports.join(", ")}`);
-        }
-      } else {
-        console.log(`Activating graph '${fileOrName!}'...`);
-        const res = await fetch(`${conn.url}/api/graphs/${fileOrName!}/start`, {
-          method: "POST",
-          headers: apiHeaders(conn.key),
-        });
-
-        const body = await res.json();
-        if (!res.ok) {
-          console.error(`Failed: ${(body as any).error}`);
-          process.exit(1);
-        }
-        console.log((body as any).message);
+      if (!result.success) {
+        console.error("Bundle failed:");
+        for (const log of result.logs) console.error(`  ${log}`);
+        process.exit(1);
       }
+
+      const bundledCode = await result.outputs[0]!.text();
+      console.log(`Bundle complete (${(bundledCode.length / 1024).toFixed(1)} KB)`);
+
+      const deployBody: Record<string, any> = { name: finalName, code: bundledCode };
+      const headers = apiHeaders(conn.key);
+
+      if (envVars) {
+        const encrypted = !!conn.encryptionKey;
+        console.log(`Including ${Object.keys(envVars).length} env var(s)${encrypted ? " (encrypted)" : ""} in deploy...`);
+        if (conn.encryptionKey) {
+          deployBody.env = encryptEnvVars(envVars, conn.encryptionKey);
+          headers["X-Env-Encrypted"] = "true";
+        } else {
+          deployBody.env = envVars;
+        }
+      }
+
+      console.log(`Deploying as '${finalName}'...`);
+      const res = await fetch(`${conn.url}/api/graphs/deploy`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(deployBody),
+      });
+
+      const body = await res.json();
+      if (!res.ok) {
+        console.error(`Deploy failed: ${(body as any).error}`);
+        process.exit(1);
+      }
+
+      console.log((body as any).message);
+      if ((body as any).exports) {
+        console.log(`  exports: ${(body as any).exports.join(", ")}`);
+      }
+    });
+
+  clientCmd
+    .command("start [name]")
+    .description("Activate a deployed graph (enable its webhook)")
+    .option("-s, --server <url>", "Server URL (overrides saved config)")
+    .option("-k, --key <key>", "API key")
+    .action(async (nameArg: string | undefined, opts) => {
+      const conn = await getConnection(opts);
+      const name = nameArg || await promptSelectGraph(conn, "all");
+
+      console.log(`Activating graph '${name}'...`);
+      const res = await fetch(`${conn.url}/api/graphs/${name}/start`, {
+        method: "POST",
+        headers: apiHeaders(conn.key),
+      });
+
+      const body = await res.json();
+      if (!res.ok) {
+        console.error(`Failed: ${(body as any).error}`);
+        process.exit(1);
+      }
+      console.log((body as any).message);
     });
 
   clientCmd

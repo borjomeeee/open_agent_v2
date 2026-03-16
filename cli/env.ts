@@ -3,7 +3,7 @@ import { resolve } from "path";
 import * as p from "@clack/prompts";
 import { encryptEnvVars } from "../lib/crypto.ts";
 import { getConnection, apiHeaders, parseEnvFile, type ServerProfile } from "./config.ts";
-import { handleCancel, promptSelectGraph } from "./prompts.ts";
+import { handleCancel, promptSelectGraph, promptFilePick } from "./prompts.ts";
 
 function prepareEnvPayload(
   vars: Record<string, string>,
@@ -43,12 +43,7 @@ export function registerEnvCommands(clientCmd: Command) {
         handleCancel(source);
 
         if (source === "file") {
-          const envPath = await p.text({
-            message: "Path to .env file",
-            placeholder: "./.env",
-            validate: (v) => (!v ? "Path is required" : undefined),
-          });
-          handleCancel(envPath);
+          const envPath = await promptFilePick("Select the .env file");
           const fileVars = await parseEnvFile(resolve(envPath));
           Object.assign(parsed, fileVars);
         } else {

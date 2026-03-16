@@ -31,6 +31,7 @@ export async function handleTelegramIngress(
     }
 
     const input = {
+      type: "telegram",
       message: message.text,
       chat_id: message.chat.id,
       user: {
