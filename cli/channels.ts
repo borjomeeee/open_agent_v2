@@ -96,6 +96,7 @@ export function registerChannelCommands(clientCmd: Command) {
         options: [
           { value: "webhook" as const, label: "Webhook", hint: "HTTP endpoint that invokes a graph" },
           { value: "telegram" as const, label: "Telegram", hint: "Telegram bot webhook" },
+          { value: "bitrix" as const, label: "Bitrix", hint: "Bitrix24 chat bot webhook" },
           { value: "cron" as const, label: "Cron", hint: "Scheduled graph invocation" },
           { value: "graph" as const, label: "Graph", hint: "Triggered when another graph completes" },
         ],
@@ -120,6 +121,13 @@ export function registerChannelCommands(clientCmd: Command) {
         });
         handleCancel(botToken);
         config.botToken = botToken;
+      } else if (type === "bitrix") {
+        const secret = await p.text({
+          message: "Shared secret for Bitrix webhook verification (leave empty to skip)",
+          placeholder: "optional",
+        });
+        handleCancel(secret);
+        if (secret) config.secret = secret;
       } else if (type === "cron") {
         const schedule = await p.text({
           message: "Cron schedule expression",

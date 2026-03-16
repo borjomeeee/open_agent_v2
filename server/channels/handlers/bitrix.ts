@@ -37,6 +37,7 @@ export async function handleBitrixIngress(
     }
 
     if (config.secret) {
+      log.info({ channelId: id, body }, "Bitrix body");
       const incomingSecret = body.auth?.client_id ?? body.secret;
       if (incomingSecret !== config.secret) {
         return c.json({ error: "Invalid secret" }, 401);
