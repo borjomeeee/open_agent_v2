@@ -62,7 +62,7 @@ export async function createTestServer(opts?: { apiKey?: string }): Promise<Test
   }
 
   const { createServer } = await import("../../server/index.ts");
-  const app = await createServer(dataDir);
+  const { app } = await createServer(dataDir);
 
   return {
     app,

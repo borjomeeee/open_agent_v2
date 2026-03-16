@@ -3,6 +3,15 @@ import * as p from "@clack/prompts";
 import { getConnection, apiHeaders, type ServerProfile } from "./config.ts";
 import { handleCancel, promptSelectGraph } from "./prompts.ts";
 
+function channelIngressUrl(serverUrl: string, channel: any): string {
+  switch (channel.type) {
+    case "webhook": return `${serverUrl}/hooks/${channel.id}`;
+    case "telegram": return `${serverUrl}/hooks/telegram/${channel.id}`;
+    case "bitrix": return `${serverUrl}/hooks/bitrix/${channel.id}`;
+    default: return "";
+  }
+}
+
 async function promptSelectChannel(conn: ServerProfile, filter?: "active" | "inactive"): Promise<string> {
   const res = await fetch(`${conn.url}/api/channels`, {
     headers: apiHeaders(conn.key),
@@ -23,11 +32,14 @@ async function promptSelectChannel(conn: ServerProfile, filter?: "active" | "ina
 
   const id = await p.select({
     message: "Select a channel",
-    options: channels.map((c: any) => ({
-      value: c.id as string,
-      label: `${c.type} → ${c.graphName}`,
-      hint: `${c.id.slice(0, 8)}... ${c.active ? "active" : "inactive"}`,
-    })),
+    options: channels.map((c: any) => {
+      const url = channelIngressUrl(conn.url, c);
+      return {
+        value: c.id as string,
+        label: `${c.type} → ${c.graphName}`,
+        hint: url ? url : `${c.id.slice(0, 8)}... ${c.active ? "active" : "inactive"}`,
+      };
+    }),
   });
   handleCancel(id);
   return id;
@@ -60,12 +72,13 @@ export function registerChannelCommands(clientCmd: Command) {
         return;
       }
 
-      console.log(`\n  ${"ID".padEnd(38)} ${"Type".padEnd(12)} ${"Graph".padEnd(20)} ${"Status".padEnd(10)}`);
-      console.log(`  ${"─".repeat(38)} ${"─".repeat(12)} ${"─".repeat(20)} ${"─".repeat(10)}`);
+      console.log(`\n  ${"ID".padEnd(38)} ${"Type".padEnd(12)} ${"Graph".padEnd(20)} ${"Status".padEnd(10)} URL`);
+      console.log(`  ${"─".repeat(38)} ${"─".repeat(12)} ${"─".repeat(20)} ${"─".repeat(10)} ${"─".repeat(40)}`);
 
       for (const ch of channels) {
         const status = ch.active ? "active" : "inactive";
-        console.log(`  ${ch.id.padEnd(38)} ${ch.type.padEnd(12)} ${ch.graphName.padEnd(20)} ${status.padEnd(10)}`);
+        const url = channelIngressUrl(conn.url, ch);
+        console.log(`  ${ch.id.padEnd(38)} ${ch.type.padEnd(12)} ${ch.graphName.padEnd(20)} ${status.padEnd(10)} ${url}`);
       }
       console.log();
     });

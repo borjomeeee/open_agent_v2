@@ -13,7 +13,7 @@ import { logger } from "./logger.ts";
 
 const log = logger.child({ module: "server" });
 
-export async function createServer(dataDir: string) {
+export async function createServer(dataDir: string): Promise<{ app: Hono; shutdown: () => void }> {
   await mkdir(dataDir, { recursive: true });
 
   const registry = new GraphRegistry(dataDir);
@@ -43,7 +43,14 @@ export async function createServer(dataDir: string) {
 
   await restoreActiveChannels(channelManager);
 
-  return app;
+  function shutdown() {
+    log.info("Shutting down server");
+    channelManager.stopAllCronJobs();
+    queue.shutdown();
+    log.info("Server shutdown complete");
+  }
+
+  return { app, shutdown };
 }
 
 async function restoreActiveChannels(channelManager: ChannelManager) {

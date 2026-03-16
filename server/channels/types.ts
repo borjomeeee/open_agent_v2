@@ -1,4 +1,4 @@
-export type ChannelType = "webhook" | "telegram" | "cron" | "graph";
+export type ChannelType = "webhook" | "telegram" | "cron" | "graph" | "bitrix";
 
 export interface WebhookConfig {
   path?: string;
@@ -18,7 +18,11 @@ export interface GraphConfig {
   sourceGraph: string;
 }
 
-export type ChannelConfig = WebhookConfig | TelegramConfig | CronConfig | GraphConfig;
+export interface BitrixConfig {
+  secret?: string;
+}
+
+export type ChannelConfig = WebhookConfig | TelegramConfig | CronConfig | GraphConfig | BitrixConfig;
 
 export interface Channel {
   id: string;

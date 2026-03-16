@@ -1,8 +1,9 @@
 import { Hono, type Context } from "hono";
 import type { ChannelManager } from "../channels/manager.ts";
-import type { ChannelType, ChannelConfig, WebhookConfig, TelegramConfig, CronConfig, GraphConfig } from "../channels/types.ts";
+import type { ChannelType, ChannelConfig, TelegramConfig, CronConfig, GraphConfig } from "../channels/types.ts";
 import { handleWebhookIngress } from "../channels/handlers/webhook.ts";
 import { handleTelegramIngress, setTelegramWebhook, deleteTelegramWebhook } from "../channels/handlers/telegram.ts";
+import { handleBitrixIngress } from "../channels/handlers/bitrix.ts";
 import { startCronChannel } from "../channels/handlers/cron.ts";
 import { logger } from "../logger.ts";
 
@@ -38,7 +39,7 @@ export function createChannelRoutes(channelManager: ChannelManager) {
       return c.json({ error: "Missing 'type', 'graphName', or 'config'" }, 400);
     }
 
-    const validTypes: ChannelType[] = ["webhook", "telegram", "cron", "graph"];
+    const validTypes: ChannelType[] = ["webhook", "telegram", "cron", "graph", "bitrix"];
     if (!validTypes.includes(type)) {
       return c.json({ error: `Invalid type. Must be one of: ${validTypes.join(", ")}` }, 400);
     }
@@ -146,6 +147,7 @@ export function createIngressRoutes(channelManager: ChannelManager) {
 
   app.post("/:id", (c) => handleWebhookIngress(c, channelManager));
   app.post("/telegram/:id", (c) => handleTelegramIngress(c, channelManager));
+  app.post("/bitrix/:id", (c) => handleBitrixIngress(c, channelManager));
 
   return app;
 }
@@ -169,6 +171,8 @@ function validateConfig(type: ChannelType, config: ChannelConfig): string | null
     }
     case "graph":
       if (!(config as GraphConfig).sourceGraph) return "Graph channel requires 'sourceGraph' in config";
+      break;
+    case "bitrix":
       break;
   }
   return null;
