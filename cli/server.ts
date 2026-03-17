@@ -1,5 +1,6 @@
 import type { Command } from "commander";
-import { resolve } from "path";
+import { resolve, join } from "path";
+import { appendFileSync, mkdirSync } from "fs";
 import * as p from "@clack/prompts";
 import { loadAppConfig, saveAppConfig } from "./config.ts";
 
@@ -65,10 +66,43 @@ export function registerServerCommands(program: Command) {
         return process.exit(0);
       }
 
-      process.env.OPENAGENT_LOG_DIR = resolve(dataDir, "logs");
+      const logDir = resolve(dataDir, "logs");
+      process.env.OPENAGENT_LOG_DIR = logDir;
 
       const { createServer } = await import("../server/index.ts");
-      const { app } = await createServer(dataDir);
+      const { app, shutdown } = await createServer(dataDir);
+
+      function writeCrashLog(label: string, err: unknown) {
+        try {
+          mkdirSync(logDir, { recursive: true });
+          const ts = new Date().toISOString();
+          const stack = err instanceof Error ? err.stack : String(err);
+          appendFileSync(
+            join(logDir, "crash.log"),
+            `[${ts}] ${label}: ${stack}\n`,
+          );
+        } catch {}
+      }
+
+      process.on("uncaughtException", (err) => {
+        writeCrashLog("uncaughtException", err);
+        try { shutdown(); } catch {}
+        process.exit(1);
+      });
+
+      process.on("unhandledRejection", (reason) => {
+        writeCrashLog("unhandledRejection", reason);
+        try { shutdown(); } catch {}
+        process.exit(1);
+      });
+
+      for (const sig of ["SIGTERM", "SIGINT"] as const) {
+        process.on(sig, () => {
+          writeCrashLog("signal", sig);
+          try { shutdown(); } catch {}
+          process.exit(0);
+        });
+      }
 
       console.log(`openagent server listening on port ${port}`);
       console.log(`  data-dir: ${dataDir}`);
