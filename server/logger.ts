@@ -65,8 +65,8 @@ function createPinoLogger() {
   }
 
   const streams: pino.StreamEntry[] = [
-    { stream: process.stdout },
-    { stream: createRotatingFileStream(LOG_DIR) as any },
+    { level: level as pino.Level, stream: process.stdout },
+    { level: level as pino.Level, stream: createRotatingFileStream(LOG_DIR) as any },
   ];
 
   return pino({ level }, pino.multistream(streams));

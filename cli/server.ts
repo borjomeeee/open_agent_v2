@@ -38,27 +38,37 @@ export function registerServerCommands(program: Command) {
           dataDir,
         ];
 
+        const pidPath = resolve("openagent.pid");
+        const pidFile = Bun.file(pidPath);
+        if (await pidFile.exists()) {
+          const pid = parseInt(await pidFile.text());
+          try {
+            process.kill(pid, "SIGTERM");
+          } catch (err) {
+            console.error(`Failed to kill old server (pid: ${pid}): ${err}`);
+          }
+        }
+
         const proc = Bun.spawn(args as string[], {
           stdio: ["ignore", "ignore", "ignore"],
           detached: true,
-          env: process.env,
+          env: process.env
         });
 
-        const pidPath = resolve("openagent.pid");
-        await Bun.write(pidPath, String(proc.pid));
+        await pidFile.write(String(proc.pid));
 
         console.log(`openagent server started (pid: ${proc.pid})`);
         console.log(`  port:     ${port}`);
         console.log(`  data-dir: ${dataDir}`);
         console.log(`  pid file: ${pidPath}`);
         proc.unref();
-        process.exit(0);
+        return process.exit(0);
       }
 
       process.env.OPENAGENT_LOG_DIR = resolve(dataDir, "logs");
 
       const { createServer } = await import("../server/index.ts");
-      const { app, shutdown } = await createServer(dataDir);
+      const { app } = await createServer(dataDir);
 
       console.log(`openagent server listening on port ${port}`);
       console.log(`  data-dir: ${dataDir}`);
@@ -68,49 +78,6 @@ export function registerServerCommands(program: Command) {
       Bun.serve({
         port,
         fetch: app.fetch,
-      });
-
-      const pidPath = resolve("openagent.pid");
-      let isShuttingDown = false;
-
-      async function gracefulShutdown(trigger: string) {
-        if (isShuttingDown) return;
-        isShuttingDown = true;
-
-        const forceExit = setTimeout(() => {
-          console.error(
-            "[openagent] Graceful shutdown timed out after 10s, forcing exit",
-          );
-          process.exit(1);
-        }, 10_000);
-        forceExit.unref();
-
-        try {
-          shutdown();
-        } catch (err) {
-          console.error("[openagent] Error during shutdown:", err);
-        }
-
-        try {
-          const { unlink } = await import("fs/promises");
-          await unlink(pidPath);
-        } catch {}
-
-        console.log(`[openagent] Server stopped (trigger: ${trigger})`);
-        process.exit(0);
-      }
-
-      process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
-      process.on("SIGINT", () => gracefulShutdown("SIGINT"));
-
-      process.on("uncaughtException", (err) => {
-        console.error("[openagent] Uncaught exception:", err);
-        gracefulShutdown("uncaughtException");
-      });
-
-      process.on("unhandledRejection", (reason) => {
-        console.error("[openagent] Unhandled rejection:", reason);
-        gracefulShutdown("unhandledRejection");
       });
     });
 

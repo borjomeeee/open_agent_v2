@@ -50,8 +50,6 @@ export async function createServer(dataDir: string): Promise<{ app: Hono; shutdo
     log.info("Server shutdown complete");
   }
 
-  log.debug("Server created");
-
   return { app, shutdown };
 }
 

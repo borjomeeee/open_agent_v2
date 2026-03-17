@@ -8,7 +8,6 @@ const log = logger.child({ module: "queue" });
 export interface JobExecutorParams {
   filePath: string;
   exportName: string;
-  graphName: string;
   input: unknown;
   threadId?: string;
   env: Record<string, string>;
@@ -17,14 +16,25 @@ export interface JobExecutorParams {
 
 export type JobExecutor = (params: JobExecutorParams) => Promise<unknown>;
 
-function workerExecutor({ filePath, exportName, graphName, input, threadId, env, signal }: JobExecutorParams): Promise<unknown> {
+function workerExecutor({
+  filePath,
+  exportName,
+  input,
+  threadId,
+  env,
+  signal,
+}: JobExecutorParams): Promise<unknown> {
   const worker = new Worker(new URL("./graph-worker.ts", import.meta.url).href);
 
   return new Promise<unknown>((resolve, reject) => {
-    signal.addEventListener("abort", () => {
-      worker.terminate();
-      reject(new DOMException("Run aborted", "AbortError"));
-    }, { once: true });
+    signal.addEventListener(
+      "abort",
+      () => {
+        worker.terminate();
+        reject(new DOMException("Run aborted", "AbortError"));
+      },
+      { once: true },
+    );
 
     worker.onmessage = (e) => {
       worker.terminate();
@@ -40,7 +50,7 @@ function workerExecutor({ filePath, exportName, graphName, input, threadId, env,
       reject(e);
     };
 
-    worker.postMessage({ filePath, exportName, graphName, input, threadId, env });
+    worker.postMessage({ filePath, exportName, input, threadId, env });
   });
 }
 
@@ -72,21 +82,36 @@ export class GraphQueue {
   private activeCount = 0;
   private activeRuns = new Map<string, AbortController>();
   private callbacks = new Map<string, JobCallbacks>();
-  private waiters = new Map<string, { resolve: (v: any) => void; reject: (e: Error) => void }>();
+  private waiters = new Map<
+    string,
+    { resolve: (v: any) => void; reject: (e: Error) => void }
+  >();
   private registry: GraphRegistry;
   private executor: JobExecutor;
 
-  constructor(dataDir: string, registry: GraphRegistry, opts?: {
-    maxConcurrency?: number;
-    maxRetries?: number;
-    retentionHours?: number;
-    executor?: JobExecutor;
-  }) {
+  constructor(
+    dataDir: string,
+    registry: GraphRegistry,
+    opts?: {
+      maxConcurrency?: number;
+      maxRetries?: number;
+      retentionHours?: number;
+      executor?: JobExecutor;
+    },
+  ) {
     this.registry = registry;
     this.executor = opts?.executor ?? workerExecutor;
-    this.maxConcurrency = opts?.maxConcurrency ?? (parseInt(process.env.MAX_CONCURRENT_RUNS || "") || 5);
-    this.maxRetries = opts?.maxRetries ?? (parseInt(process.env.MAX_JOB_RETRIES || "") || 2);
-    this.retentionMs = (opts?.retentionHours ?? (parseInt(process.env.JOB_RETENTION_HOURS || "") || 24)) * 60 * 60 * 1000;
+    this.maxConcurrency =
+      opts?.maxConcurrency ??
+      (parseInt(process.env.MAX_CONCURRENT_RUNS || "") || 5);
+    this.maxRetries =
+      opts?.maxRetries ?? (parseInt(process.env.MAX_JOB_RETRIES || "") || 2);
+    this.retentionMs =
+      (opts?.retentionHours ??
+        (parseInt(process.env.JOB_RETENTION_HOURS || "") || 24)) *
+      60 *
+      60 *
+      1000;
 
     this.db = new Database(join(dataDir, "queue.db"));
     this.db.run("PRAGMA journal_mode = WAL");
@@ -116,11 +141,16 @@ export class GraphQueue {
 
   recoverOnStartup() {
     const stuck = this.db
-      .query("UPDATE jobs SET status = 'pending', started_at = NULL WHERE status = 'running' RETURNING id")
+      .query(
+        "UPDATE jobs SET status = 'pending', started_at = NULL WHERE status = 'running' RETURNING id",
+      )
       .all() as { id: string }[];
 
     if (stuck.length > 0) {
-      log.info({ count: stuck.length }, "Recovered stuck jobs from previous run");
+      log.info(
+        { count: stuck.length },
+        "Recovered stuck jobs from previous run",
+      );
     }
 
     this.cleanupOldJobs();
@@ -130,7 +160,9 @@ export class GraphQueue {
   private cleanupOldJobs() {
     const cutoff = new Date(Date.now() - this.retentionMs).toISOString();
     const deleted = this.db
-      .query("DELETE FROM jobs WHERE status IN ('completed', 'failed', 'aborted') AND completed_at < ? RETURNING id")
+      .query(
+        "DELETE FROM jobs WHERE status IN ('completed', 'failed', 'aborted') AND completed_at < ? RETURNING id",
+      )
       .all(cutoff) as { id: string }[];
 
     if (deleted.length > 0) {
@@ -138,20 +170,40 @@ export class GraphQueue {
     }
   }
 
-  enqueue(graphName: string, input: any, opts?: {
-    threadId?: string;
-    onComplete?: (result: any) => Promise<void>;
-    onError?: (err: Error) => Promise<void>;
-  }): string {
+  enqueue(
+    graphName: string,
+    input: any,
+    opts?: {
+      threadId?: string;
+      onComplete?: (result: any) => Promise<void>;
+      onError?: (err: Error) => Promise<void>;
+    },
+  ): string {
     const id = crypto.randomUUID();
     const threadId = opts?.threadId ?? null;
 
-    this.db.query(
-      "INSERT INTO jobs (id, graph_name, thread_id, input, status, max_retries, created_at) VALUES (?, ?, ?, ?, 'pending', ?, ?)",
-    ).run(id, graphName, threadId, JSON.stringify(input), this.maxRetries, new Date().toISOString());
+    this.db
+      .query(
+        "INSERT INTO jobs (id, graph_name, thread_id, input, status, max_retries, created_at) VALUES (?, ?, ?, ?, 'pending', ?, ?)",
+      )
+      .run(
+        id,
+        graphName,
+        threadId,
+        JSON.stringify(input),
+        this.maxRetries,
+        new Date().toISOString(),
+      );
+    log.info(
+      { state: "pending", graphName, threadId, jobId: id },
+      "job:queued",
+    );
 
     if (opts?.onComplete || opts?.onError) {
-      this.callbacks.set(id, { onComplete: opts.onComplete, onError: opts.onError });
+      this.callbacks.set(id, {
+        onComplete: opts.onComplete,
+        onError: opts.onError,
+      });
     }
 
     if (threadId) {
@@ -167,7 +219,11 @@ export class GraphQueue {
     return id;
   }
 
-  enqueueAndWait(graphName: string, input: any, threadId?: string): Promise<any> {
+  enqueueAndWait(
+    graphName: string,
+    input: any,
+    threadId?: string,
+  ): Promise<any> {
     return new Promise((resolve, reject) => {
       const jobId = this.enqueue(graphName, input, { threadId });
       this.waiters.set(jobId, { resolve, reject });
@@ -175,7 +231,9 @@ export class GraphQueue {
   }
 
   stats(): { active: number; pending: number } {
-    const row = this.db.query("SELECT COUNT(*) as cnt FROM jobs WHERE status = 'pending'").get() as { cnt: number };
+    const row = this.db
+      .query("SELECT COUNT(*) as cnt FROM jobs WHERE status = 'pending'")
+      .get() as { cnt: number };
     return { active: this.activeCount, pending: row.cnt };
   }
 
@@ -190,7 +248,9 @@ export class GraphQueue {
   private processNext() {
     if (this.activeCount >= this.maxConcurrency) return;
 
-    const eligible = this.db.query(`
+    const eligible = this.db
+      .query(
+        `
       SELECT DISTINCT graph_name, thread_id FROM jobs
       WHERE status = 'pending'
         AND NOT EXISTS (
@@ -200,13 +260,17 @@ export class GraphQueue {
             AND j2.status = 'running'
         )
       LIMIT 1
-    `).get() as { graph_name: string; thread_id: string | null } | null;
+    `,
+      )
+      .get() as { graph_name: string; thread_id: string | null } | null;
 
     if (!eligible) return;
 
-    const pendingJobs = this.db.query(
-      "SELECT * FROM jobs WHERE graph_name = ? AND thread_id IS ? AND status = 'pending' ORDER BY created_at",
-    ).all(eligible.graph_name, eligible.thread_id) as JobRow[];
+    const pendingJobs = this.db
+      .query(
+        "SELECT * FROM jobs WHERE graph_name = ? AND thread_id IS ? AND status = 'pending' ORDER BY created_at",
+      )
+      .all(eligible.graph_name, eligible.thread_id) as JobRow[];
 
     if (pendingJobs.length === 0) return;
 
@@ -217,29 +281,59 @@ export class GraphQueue {
       mergedInput = [JSON.parse(pendingJobs[0]!.input)];
     } else {
       mergedInput = pendingJobs.map((j) => JSON.parse(j.input));
-      log.info({ graphName: eligible.graph_name, threadId: eligible.thread_id, batchSize: pendingJobs.length }, "Batched jobs");
+      log.info(
+        {
+          graphName: eligible.graph_name,
+          threadId: eligible.thread_id,
+          batchSize: pendingJobs.length,
+        },
+        "Batched jobs",
+      );
     }
 
     const placeholders = jobIds.map(() => "?").join(",");
-    this.db.query(
-      `UPDATE jobs SET status = 'running', started_at = ?, attempts = attempts + 1 WHERE id IN (${placeholders})`,
-    ).run(new Date().toISOString(), ...jobIds);
+    this.db
+      .query(
+        `UPDATE jobs SET status = 'running', started_at = ?, attempts = attempts + 1 WHERE id IN (${placeholders})`,
+      )
+      .run(new Date().toISOString(), ...jobIds);
+    log.info(
+      {
+        state: "running",
+        graphName: eligible.graph_name,
+        threadId: eligible.thread_id,
+        jobIds,
+        batchSize: pendingJobs.length,
+      },
+      "job:start",
+    );
 
     this.activeCount++;
 
-    this.executeJob(jobIds, eligible.graph_name, mergedInput, eligible.thread_id ?? undefined)
-      .finally(() => {
-        this.activeCount--;
-        this.processNext();
-      });
+    this.executeJob(
+      jobIds,
+      eligible.graph_name,
+      mergedInput,
+      eligible.thread_id ?? undefined,
+    ).finally(() => {
+      this.activeCount--;
+      this.processNext();
+    });
 
     if (this.activeCount < this.maxConcurrency) {
       this.processNext();
     }
   }
 
-  private async executeJob(jobIds: string[], graphName: string, input: any, threadId?: string): Promise<void> {
-    const runKey = threadId ? `${graphName}::${threadId}` : `${graphName}::${jobIds[0]}`;
+  private async executeJob(
+    jobIds: string[],
+    graphName: string,
+    input: any,
+    threadId?: string,
+  ): Promise<void> {
+    const runKey = threadId
+      ? `${graphName}::${threadId}`
+      : `${graphName}::${jobIds[0]}`;
     const controller = new AbortController();
     this.activeRuns.set(runKey, controller);
 
@@ -256,7 +350,6 @@ export class GraphQueue {
       const result = await this.executor({
         filePath,
         exportName,
-        graphName,
         input,
         threadId,
         env,
@@ -265,11 +358,13 @@ export class GraphQueue {
 
       const now = new Date().toISOString();
       const placeholders = jobIds.map(() => "?").join(",");
-      this.db.query(
-        `UPDATE jobs SET status = 'completed', result = ?, completed_at = ? WHERE id IN (${placeholders})`,
-      ).run(JSON.stringify(result), now, ...jobIds);
+      this.db
+        .query(
+          `UPDATE jobs SET status = 'completed', result = ?, completed_at = ? WHERE id IN (${placeholders})`,
+        )
+        .run(JSON.stringify(result), now, ...jobIds);
 
-      log.info({ graphName, threadId, jobIds }, "job:complete");
+      log.info({ graphName, threadId, jobIds, result }, "job:complete");
 
       for (const jobId of jobIds) {
         const waiter = this.waiters.get(jobId);
@@ -279,18 +374,25 @@ export class GraphQueue {
         }
         const cb = this.callbacks.get(jobId);
         if (cb?.onComplete) {
-          cb.onComplete(result).catch((err) => log.error({ jobId, err }, "onComplete callback error"));
+          cb.onComplete(result).catch((err) =>
+            log.error({ jobId, err }, "onComplete callback error"),
+          );
         }
         this.callbacks.delete(jobId);
       }
     } catch (err: any) {
       if (controller.signal.aborted) {
-        log.debug({ graphName, threadId, jobIds }, "Run aborted");
+        log.info(
+          { state: "aborted", graphName, threadId, jobIds },
+          "job:aborted",
+        );
         const now = new Date().toISOString();
         const placeholders = jobIds.map(() => "?").join(",");
-        this.db.query(
-          `UPDATE jobs SET status = 'aborted', completed_at = ? WHERE id IN (${placeholders})`,
-        ).run(now, ...jobIds);
+        this.db
+          .query(
+            `UPDATE jobs SET status = 'aborted', completed_at = ? WHERE id IN (${placeholders})`,
+          )
+          .run(now, ...jobIds);
         for (const jobId of jobIds) {
           const waiter = this.waiters.get(jobId);
           if (waiter) {
@@ -303,21 +405,37 @@ export class GraphQueue {
       }
 
       const now = new Date().toISOString();
-      const firstJob = this.db.query("SELECT * FROM jobs WHERE id = ?").get(jobIds[0]!) as JobRow | null;
+      const firstJob = this.db
+        .query("SELECT * FROM jobs WHERE id = ?")
+        .get(jobIds[0]!) as JobRow | null;
       const canRetry = firstJob && firstJob.attempts < firstJob.max_retries;
 
       const placeholders = jobIds.map(() => "?").join(",");
 
       if (canRetry) {
-        this.db.query(
-          `UPDATE jobs SET status = 'pending', started_at = NULL WHERE id IN (${placeholders})`,
-        ).run(...jobIds);
-        log.warn({ graphName, threadId, attempt: firstJob!.attempts, err: err.message }, "Job failed, will retry");
+        this.db
+          .query(
+            `UPDATE jobs SET status = 'pending', started_at = NULL WHERE id IN (${placeholders})`,
+          )
+          .run(...jobIds);
+        log.warn(
+          {
+            state: "pending",
+            previousState: "running",
+            graphName,
+            threadId,
+            attempt: firstJob!.attempts,
+            err: err.message,
+          },
+          "job:retry",
+        );
       } else {
-        this.db.query(
-          `UPDATE jobs SET status = 'failed', error = ?, completed_at = ? WHERE id IN (${placeholders})`,
-        ).run(err.message, now, ...jobIds);
-        log.error({ graphName, threadId, err }, "Job failed permanently");
+        this.db
+          .query(
+            `UPDATE jobs SET status = 'failed', error = ?, completed_at = ? WHERE id IN (${placeholders})`,
+          )
+          .run(err.message, now, ...jobIds);
+        log.error({ state: "failed", graphName, threadId, err }, "job:failed");
 
         for (const jobId of jobIds) {
           const waiter = this.waiters.get(jobId);
@@ -327,7 +445,9 @@ export class GraphQueue {
           }
           const cb = this.callbacks.get(jobId);
           if (cb?.onError) {
-            cb.onError(err).catch((e) => log.error({ jobId, e }, "onError callback error"));
+            cb.onError(err).catch((e) =>
+              log.error({ jobId, e }, "onError callback error"),
+            );
           }
           this.callbacks.delete(jobId);
         }
