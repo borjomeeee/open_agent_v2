@@ -29,26 +29,27 @@ function workerExecutor({
   return new Promise<unknown>((resolve, reject) => {
     let settled = false;
 
-    function finish(
-      outcome: "resolve" | "reject",
-      value: unknown,
-    ) {
+    function finish(outcome: "resolve" | "reject", value: unknown) {
       if (settled) return;
       settled = true;
-      try { worker.terminate(); } catch {}
       if (outcome === "resolve") resolve(value);
       else reject(value);
     }
 
     signal.addEventListener(
       "abort",
-      () => finish("reject", new DOMException("Run aborted", "AbortError")),
+      () => {
+        worker.postMessage({ type: "abort" });
+        finish("reject", new DOMException("Run aborted", "AbortError"));
+      },
       { once: true },
     );
 
     worker.onmessage = (e) => {
       if (e.data.ok) {
         finish("resolve", e.data.result);
+      } else if (e.data.aborted) {
+        finish("reject", new DOMException("Run aborted", "AbortError"));
       } else {
         finish("reject", new Error(e.data.error));
       }

@@ -11,6 +11,7 @@ declare const self: {
 };
 
 interface RunMessage {
+  type?: "run" | "abort";
   filePath: string;
   exportName: string;
   input: unknown;
@@ -18,8 +19,18 @@ interface RunMessage {
   env: Record<string, string>;
 }
 
+let runAbort: AbortController | null = null;
+
 self.onmessage = async (event: MessageEvent<RunMessage>) => {
-  const { filePath, exportName, input, threadId, env } = event.data;
+  const data = event.data;
+
+  if (data.type === "abort") {
+    runAbort?.abort();
+    return;
+  }
+
+  const { filePath, exportName, input, threadId, env } = data;
+  runAbort = new AbortController();
 
   try {
     const absPath = resolve(filePath);
@@ -36,11 +47,18 @@ self.onmessage = async (event: MessageEvent<RunMessage>) => {
 
     const config: Record<string, unknown> = {
       ...(threadId && { configurable: { thread_id: threadId } }),
+      signal: runAbort.signal,
     };
-    
+
     const result = await graph.invoke({ input }, config);
     self.postMessage({ ok: true, result });
   } catch (err: any) {
-    self.postMessage({ ok: false, error: err?.message ?? String(err) });
+    if (runAbort?.signal.aborted) {
+      self.postMessage({ ok: false, error: "Run aborted", aborted: true });
+    } else {
+      self.postMessage({ ok: false, error: err?.message ?? String(err) });
+    }
+  } finally {
+    process.exit(0);
   }
 };
