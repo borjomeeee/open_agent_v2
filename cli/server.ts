@@ -60,6 +60,7 @@ export function registerServerCommands(program: Command) {
       console.log(`openagent server listening on port ${port}`);
       console.log(`  data-dir: ${dataDir}`);
       console.log(`  logs:     ${process.env.OPENAGENT_LOG_DIR}`);
+      console.log(`  log level: ${process.env.LOG_LEVEL}`);
 
       Bun.serve({
         port,
