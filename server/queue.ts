@@ -27,27 +27,35 @@ function workerExecutor({
   const worker = new Worker(new URL("./graph-worker.ts", import.meta.url).href);
 
   return new Promise<unknown>((resolve, reject) => {
+    let settled = false;
+
+    function finish(
+      outcome: "resolve" | "reject",
+      value: unknown,
+    ) {
+      if (settled) return;
+      settled = true;
+      try { worker.terminate(); } catch {}
+      if (outcome === "resolve") resolve(value);
+      else reject(value);
+    }
+
     signal.addEventListener(
       "abort",
-      () => {
-        worker.terminate();
-        reject(new DOMException("Run aborted", "AbortError"));
-      },
+      () => finish("reject", new DOMException("Run aborted", "AbortError")),
       { once: true },
     );
 
     worker.onmessage = (e) => {
-      worker.terminate();
       if (e.data.ok) {
-        resolve(e.data.result);
+        finish("resolve", e.data.result);
       } else {
-        reject(new Error(e.data.error));
+        finish("reject", new Error(e.data.error));
       }
     };
 
     worker.onerror = (e) => {
-      worker.terminate();
-      reject(e);
+      finish("reject", e);
     };
 
     worker.postMessage({ filePath, exportName, input, threadId, env });
