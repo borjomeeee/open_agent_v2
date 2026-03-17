@@ -1,7 +1,4 @@
 import pino from "pino";
-import { BaseCallbackHandler } from "@langchain/core/callbacks/base";
-import type { Serialized } from "@langchain/core/load/serializable";
-import type { ChainValues } from "@langchain/core/utils/types";
 import {
   createWriteStream,
   statSync,
@@ -76,63 +73,3 @@ function createPinoLogger() {
 }
 
 export const logger = createPinoLogger();
-
-export class LoggingCallbackHandler extends BaseCallbackHandler {
-  name = "LoggingCallbackHandler";
-
-  private log = logger.child({ module: "graph" });
-  private timers = new Map<string, number>();
-
-  constructor(private graphName: string) {
-    super();
-    this.ignoreLLM = true;
-    this.ignoreRetriever = true;
-    this.ignoreAgent = true;
-  }
-
-  override handleChainStart(
-    _chain: Serialized,
-    _inputs: ChainValues,
-    runId: string,
-    _parentRunId?: string,
-    _tags?: string[],
-    _metadata?: Record<string, unknown>,
-    runName?: string,
-  ) {
-    this.timers.set(runId, Date.now());
-    this.log.debug({ graph: this.graphName, node: runName, runId }, "node:start");
-  }
-
-  override handleChainEnd(
-    _outputs: ChainValues,
-    runId: string,
-    _parentRunId?: string,
-    _tags?: string[],
-  ) {
-    const start = this.timers.get(runId);
-    const durationMs = start ? Date.now() - start : undefined;
-    this.timers.delete(runId);
-    this.log.debug({ graph: this.graphName, runId, durationMs }, "node:end");
-  }
-
-  override handleChainError(
-    err: unknown,
-    runId: string,
-  ) {
-    const start = this.timers.get(runId);
-    const durationMs = start ? Date.now() - start : undefined;
-    this.timers.delete(runId);
-    this.log.error({ graph: this.graphName, runId, durationMs, err }, "node:error");
-  }
-}
-
-export function withLoggingCallbacks(graphName: string, config?: Record<string, any>): Record<string, any> {
-  const handler = new LoggingCallbackHandler(graphName);
-  const merged = { ...config };
-  if (merged.callbacks) {
-    merged.callbacks = [...merged.callbacks, handler];
-  } else {
-    merged.callbacks = [handler];
-  }
-  return merged;
-}

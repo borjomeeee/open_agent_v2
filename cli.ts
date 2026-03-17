@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import "dotenv/config";
 import { Command } from "commander";
 import { registerServerCommands } from "./cli/server.ts";
 import { registerClientCommands } from "./cli/client.ts";

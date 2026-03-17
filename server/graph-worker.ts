@@ -1,5 +1,7 @@
 import { resolve } from "path";
-import { LoggingCallbackHandler } from "./logger.ts";
+import { logger } from "./logger.ts";
+
+const log = logger.child({ module: "graph" });
 
 declare const self: {
   onmessage: ((event: MessageEvent) => void) | null;
@@ -30,14 +32,25 @@ self.onmessage = async (event: MessageEvent<RunMessage>) => {
     const graph = builder(env);
 
     const config: Record<string, unknown> = {
-      callbacks: [new LoggingCallbackHandler(graphName)],
       ...(threadId && { configurable: { thread_id: threadId } }),
+      streamMode: "updates"
     };
 
-    const result = await graph.invoke({ input }, config);
+    const start = Date.now();
+    log.info({ graph: graphName, threadId }, "graph:start");
+
+    let result: any;
+    for await (const chunk of await graph.stream({ input }, config)) {
+      const [nodeName] = Object.keys(chunk);
+      log.info({ graph: graphName, threadId, node: nodeName }, "node:complete");
+      result = chunk;
+    }
+
+    log.info({ graph: graphName, threadId, durationMs: Date.now() - start }, "graph:complete");
 
     self.postMessage({ ok: true, result });
   } catch (err: any) {
+    log.error({ graph: graphName, threadId, err: err?.message }, "graph:error");
     self.postMessage({ ok: false, error: err?.message ?? String(err) });
   }
 };

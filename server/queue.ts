@@ -269,6 +269,8 @@ export class GraphQueue {
         `UPDATE jobs SET status = 'completed', result = ?, completed_at = ? WHERE id IN (${placeholders})`,
       ).run(JSON.stringify(result), now, ...jobIds);
 
+      log.info({ graphName, threadId, jobIds }, "job:complete");
+
       for (const jobId of jobIds) {
         const waiter = this.waiters.get(jobId);
         if (waiter) {
