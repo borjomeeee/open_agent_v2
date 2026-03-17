@@ -20,7 +20,9 @@ export function registerServerCommands(program: Command) {
       const dataDir = resolve(opts.dataDir || saved?.dataDir || "./deployed");
 
       if (!saved && !opts.port && !opts.dataDir && !opts.foreground) {
-        console.log(`Using defaults (port: ${port}, data-dir: ${dataDir}). Run \`openagent server setup\` to configure.`);
+        console.log(
+          `Using defaults (port: ${port}, data-dir: ${dataDir}). Run \`openagent server setup\` to configure.`,
+        );
       }
 
       if (!opts.foreground) {
@@ -39,6 +41,7 @@ export function registerServerCommands(program: Command) {
         const proc = Bun.spawn(args as string[], {
           stdio: ["ignore", "ignore", "ignore"],
           detached: true,
+          env: process.env,
         });
 
         const pidPath = resolve("openagent.pid");
@@ -75,7 +78,9 @@ export function registerServerCommands(program: Command) {
         isShuttingDown = true;
 
         const forceExit = setTimeout(() => {
-          console.error("[openagent] Graceful shutdown timed out after 10s, forcing exit");
+          console.error(
+            "[openagent] Graceful shutdown timed out after 10s, forcing exit",
+          );
           process.exit(1);
         }, 10_000);
         forceExit.unref();
@@ -171,7 +176,9 @@ export function registerServerCommands(program: Command) {
     .option("-d, --data-dir <dir>", "Data directory")
     .action(async (opts) => {
       const config = await loadAppConfig();
-      const dataDir = resolve(opts.dataDir || config.serverConfig?.dataDir || "./deployed");
+      const dataDir = resolve(
+        opts.dataDir || config.serverConfig?.dataDir || "./deployed",
+      );
       const logFile = resolve(dataDir, "logs", "server.log");
 
       if (!(await Bun.file(logFile).exists())) {
@@ -184,10 +191,18 @@ export function registerServerCommands(program: Command) {
       if (opts.follow) tailArgs.push("-f");
       tailArgs.push(logFile);
 
-      const tail = Bun.spawn(["tail", ...tailArgs], { stdout: opts.raw ? "inherit" : "pipe" });
+      const tail = Bun.spawn(["tail", ...tailArgs], {
+        stdout: opts.raw ? "inherit" : "pipe",
+      });
 
       if (!opts.raw) {
-        const prettyBin = resolve(import.meta.dir, "..", "node_modules", ".bin", "pino-pretty");
+        const prettyBin = resolve(
+          import.meta.dir,
+          "..",
+          "node_modules",
+          ".bin",
+          "pino-pretty",
+        );
         const pretty = Bun.spawn([prettyBin, "--colorize"], {
           stdin: tail.stdout!,
           stdout: "inherit",
@@ -216,23 +231,30 @@ export function registerServerCommands(program: Command) {
       } else {
         p.intro("Server configuration");
 
-        const answers = await p.group({
-          port: () =>
-            p.text({
-              message: "Port to listen on",
-              placeholder: String(existing?.port ?? 3000),
-              defaultValue: String(existing?.port ?? 3000),
-              validate: (v) => (!v || isNaN(parseInt(v)) ? "Must be a number" : undefined),
-            }),
-          dataDir: () =>
-            p.text({
-              message: "Directory for deployed graphs",
-              placeholder: existing?.dataDir ?? "./deployed",
-              defaultValue: existing?.dataDir ?? "./deployed",
-            }),
-        }, {
-          onCancel: () => { p.cancel("Operation cancelled."); process.exit(0); },
-        });
+        const answers = await p.group(
+          {
+            port: () =>
+              p.text({
+                message: "Port to listen on",
+                placeholder: String(existing?.port ?? 3000),
+                defaultValue: String(existing?.port ?? 3000),
+                validate: (v) =>
+                  !v || isNaN(parseInt(v)) ? "Must be a number" : undefined,
+              }),
+            dataDir: () =>
+              p.text({
+                message: "Directory for deployed graphs",
+                placeholder: existing?.dataDir ?? "./deployed",
+                defaultValue: existing?.dataDir ?? "./deployed",
+              }),
+          },
+          {
+            onCancel: () => {
+              p.cancel("Operation cancelled.");
+              process.exit(0);
+            },
+          },
+        );
 
         port = parseInt(answers.port);
         dataDir = resolve(answers.dataDir);
